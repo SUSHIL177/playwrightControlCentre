@@ -39,6 +39,8 @@ exports.IPC = {
     HEALING_REJECT: 'healing:reject',
     HEALING_ROLLBACK: 'healing:rollback',
     HEALING_LIST: 'healing:list',
+    HEALING_RUN_HEADED: 'healing:run-headed',
+    HEALING_PROGRESS_EVENT: 'healing:progress-event',
     INTEL_FLAKY_TESTS: 'intel:flaky-tests',
     INTEL_CROSS_BROWSER: 'intel:cross-browser',
     INTEL_PERFORMANCE: 'intel:performance',

@@ -259,6 +259,29 @@ export interface TerminalLogChunk {
   timestamp: string;
 }
 
+/** Live progress line emitted while a self-heal operation runs (streamed to the UI). */
+export interface HealingProgressEvent {
+  /** Present once a proposal exists (undefined for batch-level markers). */
+  proposalId?: string;
+  failureId?: string;
+  phase:
+    | 'analyze'
+    | 'generate'
+    | 'write'
+    | 'spawn'
+    | 'output'
+    | 'restore'
+    | 'approve'
+    | 'rollback'
+    | 'headed'
+    | 'done'
+    | 'error';
+  /** Human-readable step description, or a raw output line when stream is stdout/stderr. */
+  message: string;
+  stream?: 'stdout' | 'stderr' | 'system';
+  timestamp: string;
+}
+
 export type ArtifactKind = 'text' | 'image' | 'video' | 'archive' | 'pdf' | 'other';
 
 export interface ArtifactFile {

@@ -5,6 +5,7 @@ import {
   DefectClassification,
   ExecutionOptions,
   FailureCategory,
+  HealingProgressEvent,
   ScheduleConfig,
   TerminalLogChunk,
 } from '../shared/types';
@@ -66,7 +67,17 @@ const controlCenterAPI = {
   reclassifyFailure: (id: string, cat: FailureCategory, cls: DefectClassification) =>
     ipcRenderer.invoke(IPC.FAILURE_RECLASSIFY, id, cat, cls),
   generateHealingProposal: (failureId: string) => ipcRenderer.invoke(IPC.HEALING_GENERATE, failureId),
-  validateProposal: (proposalId: string) => ipcRenderer.invoke(IPC.HEALING_VALIDATE, proposalId),
+  validateProposal: (proposalId: string, editedCode?: string) =>
+    ipcRenderer.invoke(IPC.HEALING_VALIDATE, proposalId, editedCode),
+  runProposalHeaded: (proposalId: string, editedCode?: string) =>
+    ipcRenderer.invoke(IPC.HEALING_RUN_HEADED, proposalId, editedCode),
+  onHealingProgress: (cb: (evt: HealingProgressEvent) => void) => {
+    const listener = (_: unknown, evt: HealingProgressEvent) => cb(evt);
+    ipcRenderer.on(IPC.HEALING_PROGRESS_EVENT, listener);
+    return () => {
+      ipcRenderer.removeListener(IPC.HEALING_PROGRESS_EVENT, listener);
+    };
+  },
   approveAndApplyProposal: (proposalId: string, editedCode?: string) =>
     ipcRenderer.invoke(IPC.HEALING_APPROVE_APPLY, proposalId, editedCode),
   rejectProposal: (proposalId: string) => ipcRenderer.invoke(IPC.HEALING_REJECT, proposalId),

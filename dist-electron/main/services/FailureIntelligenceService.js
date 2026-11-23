@@ -7,17 +7,132 @@ exports.FailureIntelligenceService = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
-const util_1 = require("util");
 const uuid_1 = require("uuid");
+const ipcChannels_1 = require("../../shared/ipcChannels");
 const db_1 = require("../database/db");
 const pathSecurity_1 = require("../utils/pathSecurity");
-const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
 const ANSI_STRIP = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 const VALIDATION_LOG_LIMIT = 32 * 1024;
+/** Cap each in-memory stream buffer so a runaway runner cannot exhaust memory. */
+const STREAM_CAPTURE_LIMIT = 1024 * 1024 * 16;
 class FailureIntelligenceService {
     settingsService;
     constructor(settingsService) {
         this.settingsService = settingsService;
+    }
+    emit(onProgress, phase, message, stream = 'system', extra) {
+        if (!onProgress)
+            return;
+        try {
+            onProgress(ipcChannels_1.IPC.HEALING_PROGRESS_EVENT, {
+                phase,
+                message,
+                stream,
+                timestamp: new Date().toISOString(),
+                ...extra,
+            });
+        }
+        catch {
+            // UI listener gone — progress reporting must never break the heal flow.
+        }
+    }
+    /**
+     * Resolves the project's Playwright CLI invocation (direct node CLI preferred, npx
+     * fallback) shared by validation and headed runs.
+     */
+    resolvePlaywrightCli(projectRoot) {
+        const localPlaywrightCli = path_1.default.join(projectRoot, 'node_modules', '@playwright', 'test', 'cli.js');
+        const useDirectNode = fs_1.default.existsSync(localPlaywrightCli);
+        const executable = useDirectNode
+            ? process.platform === 'win32'
+                ? 'node.exe'
+                : 'node'
+            : process.platform === 'win32'
+                ? 'npx.cmd'
+                : 'npx';
+        const baseArgs = useDirectNode ? [localPlaywrightCli, 'test'] : ['playwright', 'test'];
+        return {
+            executable,
+            baseArgs,
+            displayPath: useDirectNode ? localPlaywrightCli : 'npx playwright',
+            useShell: !useDirectNode && process.platform === 'win32',
+        };
+    }
+    /**
+     * Spawns Playwright and streams every output line to `onProgress` (ANSI-stripped) while
+     * accumulating a capped log. Resolves with the exit code (null on spawn error/timeout).
+     */
+    runPlaywrightStreamed(projectRoot, args, opts = {}) {
+        const { executable, baseArgs, useShell, displayPath } = this.resolvePlaywrightCli(projectRoot);
+        const fullArgs = [...baseArgs, ...args];
+        const cleanEnv = { ...process.env };
+        delete cleanEnv.NO_COLOR;
+        cleanEnv.FORCE_COLOR = '0';
+        const executableLabel = `${executable} ${displayPath} ${args.join(' ')}`;
+        return new Promise((resolve) => {
+            let stdout = '';
+            let stderr = '';
+            let timedOut = false;
+            let spawnError;
+            const append = (which, chunk) => {
+                const text = chunk.toString('utf-8');
+                const capped = which === 'stdout' ? stdout : stderr;
+                const room = STREAM_CAPTURE_LIMIT - capped.length;
+                const addition = room > 0 ? text.slice(0, room) : '';
+                if (which === 'stdout')
+                    stdout += addition;
+                else
+                    stderr += addition;
+                for (const rawLine of text.split(/\r?\n/)) {
+                    const line = rawLine.replace(ANSI_STRIP, '');
+                    if (line.trim().length > 0) {
+                        opts.onProgress?.(ipcChannels_1.IPC.HEALING_PROGRESS_EVENT, {
+                            phase: 'output',
+                            message: line,
+                            stream: which,
+                            timestamp: new Date().toISOString(),
+                            proposalId: opts.proposalId,
+                        });
+                    }
+                }
+            };
+            let child;
+            try {
+                child = (0, child_process_1.spawn)(executable, fullArgs, {
+                    cwd: projectRoot,
+                    env: cleanEnv,
+                    shell: useShell,
+                });
+            }
+            catch (err) {
+                resolve({ exitCode: null, log: '', timedOut: false, spawnError: err?.message || String(err), executableLabel });
+                return;
+            }
+            const timeoutMs = opts.timeoutMs ?? 120000;
+            const timer = setTimeout(() => {
+                timedOut = true;
+                try {
+                    child.kill('SIGKILL');
+                }
+                catch {
+                    /* already gone */
+                }
+            }, timeoutMs);
+            child.stdout?.on('data', (chunk) => append('stdout', chunk));
+            child.stderr?.on('data', (chunk) => append('stderr', chunk));
+            child.on('error', (err) => {
+                spawnError = err?.message || String(err);
+            });
+            child.on('close', (code) => {
+                clearTimeout(timer);
+                let log = `${stdout}\n${stderr}`.trim();
+                if (spawnError)
+                    log += `${log ? '\n' : ''}[Control Center] Failed to launch Playwright: ${spawnError}`;
+                if (timedOut)
+                    log += `${log ? '\n' : ''}[Control Center] Timed out after ${Math.round(timeoutMs / 1000)}s — process killed.`;
+                resolve({ exitCode: code, log, timedOut, spawnError, executableLabel });
+            });
+        });
     }
     assertHealingEnabled() {
         const settings = this.settingsService.getSettings();
@@ -25,21 +140,26 @@ class FailureIntelligenceService {
             throw new Error('AI self-healing is disabled in Settings → AI Provider ("Self-Healing Enabled"). Enable it to generate, validate or apply healing fixes.');
         }
     }
-    async analyzeExecutionFailures(executionId) {
+    async analyzeExecutionFailures(executionId, onProgress) {
         const db = (0, db_1.getDb)();
         const batch = db.prepare('SELECT * FROM execution_batches WHERE id = ?').get(executionId);
         if (!batch)
             throw new Error('Execution batch not found.');
+        this.emit(onProgress, 'analyze', `Analyzing failures in batch ${executionId} (${batch.environment})…`);
         const failedResults = db
             .prepare(`SELECT * FROM test_results WHERE execution_id = ? AND status IN ('failed', 'timedOut')`)
             .all(executionId);
+        this.emit(onProgress, 'analyze', `${failedResults.length} failed/timed-out test(s) to classify.`);
         const analyses = [];
-        for (const res of failedResults) {
+        for (let index = 0; index < failedResults.length; index++) {
+            const res = failedResults[index];
             const existing = db.prepare('SELECT * FROM failure_analyses WHERE result_id = ?').get(res.id);
             if (existing) {
                 analyses.push(this.mapRow(existing));
+                this.emit(onProgress, 'analyze', `(${index + 1}/${failedResults.length}) ${res.test_title} — already analyzed (${existing.category}).`);
                 continue;
             }
+            this.emit(onProgress, 'analyze', `(${index + 1}/${failedResults.length}) ${res.test_title} — classifying…`);
             const analysis = await this.classifySingleFailure(res, batch.environment);
             db.prepare(`
         INSERT INTO failure_analyses (
@@ -50,7 +170,9 @@ class FailureIntelligenceService {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
       `).run(analysis.id, analysis.resultId, analysis.executionId, analysis.projectId, analysis.testTitle, analysis.filePath, analysis.folderPath, analysis.browser, analysis.environment, analysis.errorMessage, analysis.stackTrace, analysis.screenshotPath || null, analysis.tracePath || null, analysis.category, analysis.classification, analysis.probableRootCause, analysis.confidence, JSON.stringify(analysis.evidence), analysis.recommendedAction, analysis.healingEligible ? 1 : 0, analysis.createdAt);
             analyses.push(analysis);
+            this.emit(onProgress, 'analyze', `(${index + 1}/${failedResults.length}) → ${analysis.category} — ${analysis.classification} (${Math.round(analysis.confidence * 100)}%)${analysis.healingEligible ? ' — healing eligible' : ''}`);
         }
+        this.emit(onProgress, 'done', `Analysis complete: ${analyses.length} failure(s) classified.`);
         return analyses;
     }
     async classifySingleFailure(res, environment) {
@@ -181,8 +303,9 @@ class FailureIntelligenceService {
         }
         return null;
     }
-    async generateHealingProposal(failureId) {
+    async generateHealingProposal(failureId, onProgress) {
         this.assertHealingEnabled();
+        this.emit(onProgress, 'generate', 'Loading failure analysis…', 'system', { failureId });
         const db = (0, db_1.getDb)();
         const failure = db.prepare('SELECT * FROM failure_analyses WHERE id = ?').get(failureId);
         if (!failure)
@@ -190,6 +313,7 @@ class FailureIntelligenceService {
         if (!failure.healing_eligible) {
             throw new Error('Safety Guardrail: Suspected/Confirmed application defects are excluded from self-healing.');
         }
+        this.emit(onProgress, 'generate', `Target spec: ${failure.file_path}`, 'system', { failureId });
         const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(failure.project_id);
         const safeFilePath = (0, pathSecurity_1.assertPathWithinRoot)(project.root_path, failure.file_path);
         if (!fs_1.default.existsSync(safeFilePath)) {
@@ -200,16 +324,19 @@ class FailureIntelligenceService {
         let explanation = 'Added explicit visibility wait before interaction to eliminate timing race condition.';
         if (/strict mode violation/i.test(failure.error_message)) {
             proposedCode = originalCode.replace(/(await\s+page\.(?:locator|getByText|getByRole|getByTestId|getByLabel|getByPlaceholder|getByTitle|getByAltText)\([^)]*\))(\.(?:click|dblclick|fill|press|check|uncheck|hover|selectOption|setInputFiles)\()/g, '$1.first()$2');
+            this.emit(onProgress, 'generate', 'Pattern match: strict mode violation → scoping ambiguous locators to .first()', 'system', { failureId });
             explanation =
                 'Resolved Playwright strict mode violation by scoping the ambiguous locator to `.first()` while preserving all business assertions.';
         }
         else if (/Timeout \d+ms exceeded/i.test(failure.error_message)) {
             proposedCode = originalCode.replace(/(await\s+page\.goto\([^)]+\);)/g, "$1\n  await page.waitForLoadState('domcontentloaded');");
+            this.emit(onProgress, 'generate', "Pattern match: navigation timeout → inserting waitForLoadState('domcontentloaded') after goto()", 'system', { failureId });
             explanation =
                 'Added `await page.waitForLoadState(\'domcontentloaded\')` after navigation to prevent premature element interaction.';
         }
         if (proposedCode === originalCode) {
             proposedCode = `// [AI Healing Suggestion]: Verify resilient data-testid or role locator for "${failure.test_title}"\n${originalCode}`;
+            this.emit(onProgress, 'generate', 'No deterministic pattern matched — flagging for manual QA review', 'system', { failureId });
             explanation = 'Flagged target test block with locator stabilization guidance for manual QA review.';
         }
         const proposal = {
@@ -232,69 +359,65 @@ class FailureIntelligenceService {
         proposed_code, explanation, confidence, validation_status, status, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', ?)
     `).run(proposal.id, proposal.failureId, proposal.projectId, proposal.testTitle, proposal.targetFilePath, proposal.originalCode, proposal.proposedCode, proposal.explanation, proposal.confidence, proposal.createdAt);
+        this.emit(onProgress, 'generate', `Proposal created (${proposal.id.slice(0, 8)}…) — ${explanation}`, 'system', { proposalId: proposal.id, failureId });
         return proposal;
     }
-    async validateProposal(proposalId) {
+    /**
+     * The flow users expect when they click "Self-Heal": generate the fix, then immediately
+     * validate it in the background so the card they see already carries a pass/fail verdict.
+     */
+    async generateAndValidate(failureId, onProgress) {
+        const proposal = await this.generateHealingProposal(failureId, onProgress);
+        this.emit(onProgress, 'spawn', 'Auto-validating the candidate fix in the background…', 'system', { proposalId: proposal.id });
+        return this.validateProposal(proposal.id, undefined, onProgress);
+    }
+    async validateProposal(proposalId, codeOverride, onProgress) {
         this.assertHealingEnabled();
         const db = (0, db_1.getDb)();
         const row = db.prepare('SELECT * FROM healing_proposals WHERE id = ?').get(proposalId);
         if (!row)
             throw new Error('Healing proposal not found.');
+        const codeToWrite = codeOverride ?? row.proposed_code;
         const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(row.project_id);
         const safeTarget = (0, pathSecurity_1.assertPathWithinRoot)(project.root_path, row.target_file_path);
         const currentDiskContent = fs_1.default.readFileSync(safeTarget, 'utf-8');
+        const relSpec = path_1.default.relative(project.root_path, safeTarget).replace(/\\/g, '/');
+        const escapedTitle = row.test_title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        this.emit(onProgress, 'write', `Writing candidate fix to ${relSpec} (${codeToWrite.length.toLocaleString()} chars)…`, 'system', { proposalId });
+        fs_1.default.writeFileSync(safeTarget, codeToWrite, 'utf-8');
         let validationStatus = 'validated_fail';
         let validationLog = '';
         try {
-            fs_1.default.writeFileSync(safeTarget, row.proposed_code, 'utf-8');
-            const relSpec = path_1.default.relative(project.root_path, safeTarget).replace(/\\/g, '/');
-            const escapedTitle = row.test_title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // Resolve the project's own Playwright CLI (same strategy as the execution engine) —
-            // direct `node cli.js` is far faster and more reliable than npx on Windows.
-            const localPlaywrightCli = path_1.default.join(project.root_path, 'node_modules', '@playwright', 'test', 'cli.js');
-            const useDirectNode = fs_1.default.existsSync(localPlaywrightCli);
-            const executable = useDirectNode
-                ? process.platform === 'win32'
-                    ? 'node.exe'
-                    : 'node'
-                : process.platform === 'win32'
-                    ? 'npx.cmd'
-                    : 'npx';
-            const cliArgs = useDirectNode
-                ? [localPlaywrightCli, 'test', relSpec, '--grep', `(${escapedTitle})`, '--retries=0', '--workers=1', '--reporter=line']
-                : ['playwright', 'test', relSpec, '--grep', `(${escapedTitle})`, '--retries=0', '--workers=1', '--reporter=line'];
-            const cleanEnv = { ...process.env };
-            delete cleanEnv.NO_COLOR;
-            cleanEnv.FORCE_COLOR = '0';
-            const { stdout, stderr } = await execFileAsync(executable, cliArgs, {
-                cwd: project.root_path,
-                env: cleanEnv,
-                timeout: 120000,
-                maxBuffer: 1024 * 1024 * 16,
-                shell: !useDirectNode && process.platform === 'win32',
-            });
-            validationStatus = 'validated_pass';
-            validationLog = `${stdout}\n${stderr}`.trim();
+            const result = await this.runPlaywrightStreamed(project.root_path, [relSpec, '--grep', `(${escapedTitle})`, '--retries=0', '--workers=1', '--reporter=line'], { onProgress, proposalId, timeoutMs: 120000 });
+            this.emit(onProgress, 'spawn', `Ran: ${result.executableLabel}`, 'system', { proposalId });
+            validationStatus = result.spawnError || result.exitCode !== 0 ? 'validated_fail' : 'validated_pass';
+            validationLog = result.log;
         }
         catch (err) {
             validationStatus = 'validated_fail';
-            validationLog = `${err.stdout || ''}\n${err.stderr || err.message || String(err)}`.trim();
+            validationLog = String(err?.message || err);
+            this.emit(onProgress, 'error', `Validation runner error: ${validationLog}`, 'stderr', { proposalId });
         }
         finally {
             try {
                 fs_1.default.writeFileSync(safeTarget, currentDiskContent, 'utf-8');
+                this.emit(onProgress, 'restore', `Restored original ${relSpec} (validation writes are always temporary).`, 'system', { proposalId });
             }
             catch (restoreErr) {
                 validationStatus = 'validated_fail';
                 validationLog += `\n\n[Control Center] CRITICAL: failed to restore original spec after validation: ${restoreErr?.message || restoreErr}`;
+                this.emit(onProgress, 'error', 'CRITICAL: failed to restore the original spec — check the log and revert manually.', 'stderr', { proposalId });
             }
         }
         // Stored logs render verbatim in the UI — strip ANSI codes and cap their size.
         validationLog = validationLog.replace(ANSI_STRIP, '').slice(0, VALIDATION_LOG_LIMIT);
         db.prepare('UPDATE healing_proposals SET validation_status = ?, validation_log = ? WHERE id = ?').run(validationStatus, validationLog, proposalId);
+        this.emit(onProgress, 'done', validationStatus === 'validated_pass'
+            ? 'Validation PASSED — the candidate fix survived the real test run.'
+            : 'Validation FAILED — the spec was restored; review the log below.', 'system', { proposalId });
         return this.getProposal(proposalId);
     }
-    approveAndApply(proposalId, editedCode) {
+    approveAndApply(proposalId, editedCode, onProgress) {
         this.assertHealingEnabled();
         const db = (0, db_1.getDb)();
         const row = db.prepare('SELECT * FROM healing_proposals WHERE id = ?').get(proposalId);
@@ -302,11 +425,13 @@ class FailureIntelligenceService {
             throw new Error('Healing proposal not found.');
         const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(row.project_id);
         const safeTarget = (0, pathSecurity_1.assertPathWithinRoot)(project.root_path, row.target_file_path);
+        const finalCode = editedCode ?? row.proposed_code;
+        this.emit(onProgress, 'approve', `Backing up current spec before applying…`, 'system', { proposalId });
         const backupDir = path_1.default.join(project.root_path, '.pw-control-center-backups');
         (0, pathSecurity_1.ensureDirSync)(backupDir);
         const backupFile = path_1.default.join(backupDir, `${path_1.default.basename(safeTarget)}.${Date.now()}.bak`);
         fs_1.default.copyFileSync(safeTarget, backupFile);
-        const finalCode = editedCode ?? row.proposed_code;
+        this.emit(onProgress, 'approve', `Writing applied fix to ${path_1.default.basename(safeTarget)} (backup: .pw-control-center-backups/)…`, 'system', { proposalId });
         fs_1.default.writeFileSync(safeTarget, finalCode, 'utf-8');
         const now = new Date().toISOString();
         db.prepare(`
@@ -314,15 +439,17 @@ class FailureIntelligenceService {
       SET status = 'approved', proposed_code = ?, backup_file_path = ?, applied_at = ?
       WHERE id = ?
     `).run(finalCode, backupFile, now, proposalId);
+        this.emit(onProgress, 'done', 'Fix applied and persisted. Backup retained for rollback.', 'system', { proposalId });
         return this.getProposal(proposalId);
     }
-    rollbackProposal(proposalId) {
+    rollbackProposal(proposalId, onProgress) {
         const db = (0, db_1.getDb)();
         const row = db.prepare('SELECT * FROM healing_proposals WHERE id = ?').get(proposalId);
         if (!row)
             throw new Error('Healing proposal not found.');
         const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(row.project_id);
         const safeTarget = (0, pathSecurity_1.assertPathWithinRoot)(project.root_path, row.target_file_path);
+        this.emit(onProgress, 'rollback', 'Restoring the spec from backup / original snapshot…', 'system', { proposalId });
         if (row.backup_file_path && fs_1.default.existsSync(row.backup_file_path)) {
             fs_1.default.copyFileSync(row.backup_file_path, safeTarget);
         }
@@ -330,7 +457,44 @@ class FailureIntelligenceService {
             fs_1.default.writeFileSync(safeTarget, row.original_code, 'utf-8');
         }
         db.prepare(`UPDATE healing_proposals SET status = 'rolled_back' WHERE id = ?`).run(proposalId);
+        this.emit(onProgress, 'done', 'Rollback complete — spec restored.', 'system', { proposalId });
         return this.getProposal(proposalId);
+    }
+    /**
+     * Runs the target spec in HEADED mode with the candidate fix applied, so the user can
+     * watch the browser and see the healed flow working. The spec on disk is always restored
+     * afterwards — accepting the fix is a separate, explicit action (Approve & Apply).
+     */
+    async runProposalHeaded(proposalId, codeOverride, onProgress) {
+        this.assertHealingEnabled();
+        const db = (0, db_1.getDb)();
+        const row = db.prepare('SELECT * FROM healing_proposals WHERE id = ?').get(proposalId);
+        if (!row)
+            throw new Error('Healing proposal not found.');
+        const codeToWrite = codeOverride ?? row.proposed_code;
+        const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(row.project_id);
+        const safeTarget = (0, pathSecurity_1.assertPathWithinRoot)(project.root_path, row.target_file_path);
+        const currentDiskContent = fs_1.default.readFileSync(safeTarget, 'utf-8');
+        const relSpec = path_1.default.relative(project.root_path, safeTarget).replace(/\\/g, '/');
+        const escapedTitle = row.test_title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        this.emit(onProgress, 'headed', `Writing candidate fix to ${relSpec} for a headed run (auto-restores afterwards)…`, 'system', { proposalId });
+        fs_1.default.writeFileSync(safeTarget, codeToWrite, 'utf-8');
+        try {
+            const result = await this.runPlaywrightStreamed(project.root_path, [relSpec, '--grep', `(${escapedTitle})`, '--retries=0', '--workers=1', '--reporter=list', '--headed'], { onProgress, proposalId, timeoutMs: 300000 });
+            this.emit(onProgress, 'done', result.exitCode === 0
+                ? 'Headed run finished — test PASSED with the fix applied.'
+                : `Headed run finished — exit code ${result.exitCode ?? 'spawn error'}. Spec restored; review output above.`, 'system', { proposalId });
+            return { exitCode: result.exitCode };
+        }
+        finally {
+            try {
+                fs_1.default.writeFileSync(safeTarget, currentDiskContent, 'utf-8');
+                this.emit(onProgress, 'restore', `Restored original ${relSpec}. Use Approve & Apply to keep the fix.`, 'system', { proposalId });
+            }
+            catch (restoreErr) {
+                this.emit(onProgress, 'error', `CRITICAL: failed to restore spec after headed run: ${restoreErr?.message || restoreErr}`, 'stderr', { proposalId });
+            }
+        }
     }
     reclassifyFailure(failureId, category, classification) {
         const db = (0, db_1.getDb)();

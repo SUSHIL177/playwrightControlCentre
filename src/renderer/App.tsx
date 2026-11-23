@@ -272,6 +272,18 @@ export default function App() {
               onRefresh={async () => {
                 if (activeProject) await loadProjectData(activeProject.id);
               }}
+              onNavigate={setRoute}
+              onRunHeadedSpec={(specPath) =>
+                handleStartExecution({
+                  mode: 'spec',
+                  targetPaths: [specPath],
+                  headed: true,
+                  workers: 1,
+                  retries: 0,
+                  browsers: ['chromium'],
+                  description: 'Headed Verification Run',
+                })
+              }
             />
           )}
 

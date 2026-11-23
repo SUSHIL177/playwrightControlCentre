@@ -21,7 +21,7 @@ if (!window.pwControlCenter) {
   const subscribe = (event: string, cb: (payload: any) => void) => {
     if (!evtSource) {
       evtSource = new EventSource(`${BRIDGE_URL}/api/events`);
-      ['exec:log-event', 'exec:completed-event', 'tests:changed-event'].forEach((evName) => {
+      ['exec:log-event', 'exec:completed-event', 'tests:changed-event', 'healing:progress-event'].forEach((evName) => {
         evtSource!.addEventListener(evName, (e: MessageEvent) => {
           const parsed = JSON.parse(e.data);
           listeners.get(evName)?.forEach((fn) => fn(parsed));
@@ -66,8 +66,10 @@ if (!window.pwControlCenter) {
     listFailures: (id: string) => rpc('listFailures', id),
     reclassifyFailure: (id: string, c: any, cls: any) => rpc('reclassifyFailure', id, c, cls),
     generateHealingProposal: (id: string) => rpc('generateHealingProposal', id),
-    validateProposal: (id: string) => rpc('validateProposal', id),
+    validateProposal: (id: string, code?: string) => rpc('validateProposal', id, code),
+    runProposalHeaded: (id: string, code?: string) => rpc('runProposalHeaded', id, code),
     approveAndApplyProposal: (id: string, code?: string) => rpc('approveAndApplyProposal', id, code),
+    onHealingProgress: (cb: any) => subscribe('healing:progress-event', cb),
     rejectProposal: (id: string) => rpc('rejectProposal', id),
     rollbackProposal: (id: string) => rpc('rollbackProposal', id),
     listProposals: (id: string) => rpc('listProposals', id),
