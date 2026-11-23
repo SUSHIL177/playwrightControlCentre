@@ -12,10 +12,18 @@ const uuid_1 = require("uuid");
 const db_1 = require("../database/db");
 const pathSecurity_1 = require("../utils/pathSecurity");
 const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
+const ANSI_STRIP = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const VALIDATION_LOG_LIMIT = 32 * 1024;
 class FailureIntelligenceService {
     settingsService;
     constructor(settingsService) {
         this.settingsService = settingsService;
+    }
+    assertHealingEnabled() {
+        const settings = this.settingsService.getSettings();
+        if (settings.ai && settings.ai.healingEnabled === false) {
+            throw new Error('AI self-healing is disabled in Settings → AI Provider ("Self-Healing Enabled"). Enable it to generate, validate or apply healing fixes.');
+        }
     }
     async analyzeExecutionFailures(executionId) {
         const db = (0, db_1.getDb)();
@@ -46,7 +54,7 @@ class FailureIntelligenceService {
         return analyses;
     }
     async classifySingleFailure(res, environment) {
-        const err = `${res.error_message || ''}\n${res.stack_trace || ''}`;
+        const err = `${res.error_message || ''}\n${res.stack_trace || ''}`.replace(ANSI_STRIP, '');
         let category = 'Unknown';
         let classification = 'Unknown cause';
         let probableRootCause = 'Unclassified failure; inspect stack trace and Playwright trace.';
@@ -174,6 +182,7 @@ class FailureIntelligenceService {
         return null;
     }
     async generateHealingProposal(failureId) {
+        this.assertHealingEnabled();
         const db = (0, db_1.getDb)();
         const failure = db.prepare('SELECT * FROM failure_analyses WHERE id = ?').get(failureId);
         if (!failure)
@@ -190,9 +199,9 @@ class FailureIntelligenceService {
         let proposedCode = originalCode;
         let explanation = 'Added explicit visibility wait before interaction to eliminate timing race condition.';
         if (/strict mode violation/i.test(failure.error_message)) {
-            proposedCode = originalCode.replace(/(await\s+page\.(?:locator|getByText|getByRole)\([^)]+\))(\.(?:click|fill|press)\()/g, '$1.first()$2');
+            proposedCode = originalCode.replace(/(await\s+page\.(?:locator|getByText|getByRole|getByTestId|getByLabel|getByPlaceholder|getByTitle|getByAltText)\([^)]*\))(\.(?:click|dblclick|fill|press|check|uncheck|hover|selectOption|setInputFiles)\()/g, '$1.first()$2');
             explanation =
-                'Resolved Playwright strict mode violation by scoping ambiguous locator to `.first()` while preserving all business assertions.';
+                'Resolved Playwright strict mode violation by scoping the ambiguous locator to `.first()` while preserving all business assertions.';
         }
         else if (/Timeout \d+ms exceeded/i.test(failure.error_message)) {
             proposedCode = originalCode.replace(/(await\s+page\.goto\([^)]+\);)/g, "$1\n  await page.waitForLoadState('domcontentloaded');");
@@ -226,6 +235,7 @@ class FailureIntelligenceService {
         return proposal;
     }
     async validateProposal(proposalId) {
+        this.assertHealingEnabled();
         const db = (0, db_1.getDb)();
         const row = db.prepare('SELECT * FROM healing_proposals WHERE id = ?').get(proposalId);
         if (!row)
@@ -239,22 +249,53 @@ class FailureIntelligenceService {
             fs_1.default.writeFileSync(safeTarget, row.proposed_code, 'utf-8');
             const relSpec = path_1.default.relative(project.root_path, safeTarget).replace(/\\/g, '/');
             const escapedTitle = row.test_title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-            const { stdout, stderr } = await execFileAsync(npxCmd, ['playwright', 'test', relSpec, '--grep', escapedTitle, '--retries=0'], { cwd: project.root_path, shell: process.platform === 'win32' });
+            // Resolve the project's own Playwright CLI (same strategy as the execution engine) —
+            // direct `node cli.js` is far faster and more reliable than npx on Windows.
+            const localPlaywrightCli = path_1.default.join(project.root_path, 'node_modules', '@playwright', 'test', 'cli.js');
+            const useDirectNode = fs_1.default.existsSync(localPlaywrightCli);
+            const executable = useDirectNode
+                ? process.platform === 'win32'
+                    ? 'node.exe'
+                    : 'node'
+                : process.platform === 'win32'
+                    ? 'npx.cmd'
+                    : 'npx';
+            const cliArgs = useDirectNode
+                ? [localPlaywrightCli, 'test', relSpec, '--grep', `(${escapedTitle})`, '--retries=0', '--workers=1', '--reporter=line']
+                : ['playwright', 'test', relSpec, '--grep', `(${escapedTitle})`, '--retries=0', '--workers=1', '--reporter=line'];
+            const cleanEnv = { ...process.env };
+            delete cleanEnv.NO_COLOR;
+            cleanEnv.FORCE_COLOR = '0';
+            const { stdout, stderr } = await execFileAsync(executable, cliArgs, {
+                cwd: project.root_path,
+                env: cleanEnv,
+                timeout: 120000,
+                maxBuffer: 1024 * 1024 * 16,
+                shell: !useDirectNode && process.platform === 'win32',
+            });
             validationStatus = 'validated_pass';
             validationLog = `${stdout}\n${stderr}`.trim();
         }
         catch (err) {
             validationStatus = 'validated_fail';
-            validationLog = `${err.stdout || ''}\n${err.stderr || err.message}`.trim();
+            validationLog = `${err.stdout || ''}\n${err.stderr || err.message || String(err)}`.trim();
         }
         finally {
-            fs_1.default.writeFileSync(safeTarget, currentDiskContent, 'utf-8');
+            try {
+                fs_1.default.writeFileSync(safeTarget, currentDiskContent, 'utf-8');
+            }
+            catch (restoreErr) {
+                validationStatus = 'validated_fail';
+                validationLog += `\n\n[Control Center] CRITICAL: failed to restore original spec after validation: ${restoreErr?.message || restoreErr}`;
+            }
         }
+        // Stored logs render verbatim in the UI — strip ANSI codes and cap their size.
+        validationLog = validationLog.replace(ANSI_STRIP, '').slice(0, VALIDATION_LOG_LIMIT);
         db.prepare('UPDATE healing_proposals SET validation_status = ?, validation_log = ? WHERE id = ?').run(validationStatus, validationLog, proposalId);
         return this.getProposal(proposalId);
     }
     approveAndApply(proposalId, editedCode) {
+        this.assertHealingEnabled();
         const db = (0, db_1.getDb)();
         const row = db.prepare('SELECT * FROM healing_proposals WHERE id = ?').get(proposalId);
         if (!row)

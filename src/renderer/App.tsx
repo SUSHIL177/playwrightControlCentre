@@ -15,7 +15,10 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ProjectConfigPage } from './pages/ProjectConfigPage';
 import { TestExplorerPage } from './pages/TestExplorerPage';
 import { FailureAndHealingPage } from './pages/FailureAndHealingPage';
-import { ExecutionCenterPage, ReportsAndHistoryPage } from './pages/ExecutionAndReportsPages';
+import { ExecutionCenterPage } from './pages/ExecutionAndReportsPages';
+import { ReportsCenterPage } from './pages/ReportsCenterPage';
+import { ExecutionHistoryPage } from './pages/ExecutionHistoryPage';
+import { ArtifactsPage } from './pages/ArtifactsPage';
 import { FlakyAndPerformancePage, SchedulerPage, SettingsPage } from './pages/IntelligenceAndSchedulerPages';
 
 async function safeInvoke<T>(label: string, promise: Promise<T>, fallback: T): Promise<T> {
@@ -278,8 +281,26 @@ export default function App() {
 
           {route === 'scheduler' && <SchedulerPage project={activeProject} refreshKey={executionVersion} />}
 
-          {(route === 'reports' || route === 'history') && (
-            <ReportsAndHistoryPage
+          {route === 'reports' && (
+            <ReportsCenterPage
+              batches={batches}
+              onRefresh={async () => {
+                if (activeProject) await loadProjectData(activeProject.id);
+              }}
+              onRunSuite={() =>
+                handleStartExecution({
+                  mode: 'full',
+                  browsers: ['chromium'],
+                  headed: false,
+                  workers: 4,
+                  description: 'Full Regression Suite',
+                })
+              }
+            />
+          )}
+
+          {route === 'history' && (
+            <ExecutionHistoryPage
               batches={batches}
               onRefresh={async () => {
                 if (activeProject) await loadProjectData(activeProject.id);
@@ -296,6 +317,8 @@ export default function App() {
               }
             />
           )}
+
+          {route === 'artifacts' && <ArtifactsPage project={activeProject} refreshKey={executionVersion} />}
 
           {route === 'settings' && <SettingsPage />}
         </main>

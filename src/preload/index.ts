@@ -51,6 +51,15 @@ const controlCenterAPI = {
   deleteBatch: (executionId: string) => ipcRenderer.invoke(IPC.HISTORY_DELETE_BATCH, executionId),
   openReportInBrowser: (htmlReportPath: string) => ipcRenderer.invoke(IPC.REPORT_OPEN_BROWSER, htmlReportPath),
   startReportHosting: (htmlReportPath: string) => ipcRenderer.invoke(IPC.REPORT_START_HOSTING, htmlReportPath),
+  revealReportInFolder: (htmlReportPath: string) => ipcRenderer.invoke(IPC.REPORT_REVEAL_IN_FOLDER, htmlReportPath),
+
+  listArtifacts: (projectId: string) => ipcRenderer.invoke(IPC.ARTIFACTS_LIST, projectId),
+  previewArtifact: (projectId: string, relativePath: string) =>
+    ipcRenderer.invoke(IPC.ARTIFACTS_PREVIEW, projectId, relativePath),
+  openArtifact: (projectId: string, relativePath: string) =>
+    ipcRenderer.invoke(IPC.ARTIFACTS_OPEN, projectId, relativePath),
+  revealArtifact: (projectId: string, relativePath: string) =>
+    ipcRenderer.invoke(IPC.ARTIFACTS_REVEAL, projectId, relativePath),
 
   analyzeBatchFailures: (executionId: string) => ipcRenderer.invoke(IPC.FAILURE_ANALYZE_BATCH, executionId),
   listFailures: (projectId: string) => ipcRenderer.invoke(IPC.FAILURE_LIST, projectId),

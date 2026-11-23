@@ -128,7 +128,14 @@ export class ExecutionEngineService {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(options.projectId) as any;
     if (!project) throw new Error('Imported project not found.');
 
-    const executionId = `EXEC-${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}-${uuidv4().slice(0, 6).toUpperCase()}`;
+    // Meaningful, project-scoped run number + timestamp so users can tell runs apart at a glance
+    // ("Run #7 · Full Regression · Nov 23, 07:12") instead of an opaque hash.
+    const runSeqRow = db
+      .prepare('SELECT COUNT(*) + 1 AS next FROM execution_batches WHERE project_id = ?')
+      .get(project.id) as { next: number } | undefined;
+    const runSeq = String(runSeqRow?.next ?? 1).padStart(4, '0');
+    const nowStamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14); // yyyymmddHHMMSS
+    const executionId = `RUN-${runSeq}-${nowStamp.slice(0, 8)}-${nowStamp.slice(8)}-${uuidv4().slice(0, 4).toUpperCase()}`;
     const artifactsBase = path.join(app.getPath('userData'), 'executions', executionId);
     const htmlReportDir = path.join(artifactsBase, 'html-report');
     const jsonReportFile = path.join(artifactsBase, 'results.json');

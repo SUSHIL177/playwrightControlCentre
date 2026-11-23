@@ -14,6 +14,7 @@ import {
   CalendarClock,
   FileBarChart2,
   History,
+  FolderSearch,
   Settings,
 } from 'lucide-react';
 import { NavRoute } from '@shared/types';
@@ -41,6 +42,7 @@ const NAV_ITEMS: Array<{ id: NavRoute; label: string; icon: React.FC<{ className
   { id: 'scheduler', label: 'Regression Scheduler', icon: CalendarClock },
   { id: 'reports', label: 'Reports Center', icon: FileBarChart2 },
   { id: 'history', label: 'Execution History', icon: History },
+  { id: 'artifacts', label: 'Test Artifacts', icon: FolderSearch },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 

@@ -15,6 +15,7 @@ const FailureIntelligenceService_1 = require("./services/FailureIntelligenceServ
 const AnalyticsIntelligenceService_1 = require("./services/AnalyticsIntelligenceService");
 const SchedulerAndReportService_1 = require("./services/SchedulerAndReportService");
 const SettingsService_1 = require("./services/SettingsService");
+const ArtifactCatalogService_1 = require("./services/ArtifactCatalogService");
 const LocalBridgeServer_1 = require("./server/LocalBridgeServer");
 let mainWindow = null;
 let specWatcher = null;
@@ -24,7 +25,8 @@ const executionService = new ExecutionEngineService_1.ExecutionEngineService();
 const failureService = new FailureIntelligenceService_1.FailureIntelligenceService(settingsService);
 const analyticsService = new AnalyticsIntelligenceService_1.AnalyticsIntelligenceService();
 const schedulerReportService = new SchedulerAndReportService_1.SchedulerAndReportService(executionService);
-const bridgeServer = new LocalBridgeServer_1.LocalBridgeServer(discoveryService, executionService, failureService, analyticsService, schedulerReportService, settingsService, () => mainWindow);
+const artifactService = new ArtifactCatalogService_1.ArtifactCatalogService();
+const bridgeServer = new LocalBridgeServer_1.LocalBridgeServer(discoveryService, executionService, failureService, analyticsService, schedulerReportService, settingsService, artifactService, () => mainWindow);
 function createWindow() {
     mainWindow = new electron_1.BrowserWindow({
         width: 1480,
@@ -175,6 +177,29 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.REPORT_START_HOSTING, (_, htmlReportPath) => {
         return schedulerReportService.hostReportDirectory(path_1.default.dirname(htmlReportPath));
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.REPORT_REVEAL_IN_FOLDER, (_, htmlReportPath) => {
+        if (!htmlReportPath)
+            throw new Error('No report path provided.');
+        if (fs_1.default.existsSync(htmlReportPath)) {
+            electron_1.shell.showItemInFolder(htmlReportPath);
+        }
+        else {
+            electron_1.shell.openPath(path_1.default.dirname(htmlReportPath));
+        }
+        return true;
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.ARTIFACTS_LIST, (_, projectId) => {
+        return artifactService.listArtifacts(projectId);
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.ARTIFACTS_PREVIEW, (_, projectId, relativePath) => {
+        return artifactService.previewArtifact(projectId, relativePath);
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.ARTIFACTS_OPEN, (_, projectId, relativePath) => {
+        return artifactService.openArtifact(projectId, relativePath);
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.ARTIFACTS_REVEAL, (_, projectId, relativePath) => {
+        return artifactService.revealArtifact(projectId, relativePath);
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.FAILURE_ANALYZE_BATCH, (_, executionId) => {
         return failureService.analyzeExecutionFailures(executionId);
