@@ -15,6 +15,12 @@ const ANSI_STRIP = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 const VALIDATION_LOG_LIMIT = 32 * 1024;
 /** Cap each in-memory stream buffer so a runaway runner cannot exhaust memory. */
 const STREAM_CAPTURE_LIMIT = 1024 * 1024 * 16;
+/** Hard ceiling for any single LLM request made by the healing engine. */
+const HEALING_LLM_TIMEOUT_MS = 90_000;
+/** How many times the AI may revise its fix after a failed background validation. */
+const MAX_REPAIR_ATTEMPTS = 2;
+/** Spec files larger than this are truncated before being sent to the LLM. */
+const SPEC_PROMPT_LIMIT = 48 * 1024;
 class FailureIntelligenceService {
     settingsService;
     constructor(settingsService) {
@@ -303,6 +309,201 @@ class FailureIntelligenceService {
         }
         return null;
     }
+    /** True when a real AI model is configured for healing (anything except the offline engine + key/Ollama). */
+    isHealingLLMAvailable() {
+        const settings = this.settingsService.getSettings();
+        if (!settings.ai)
+            return false;
+        if (settings.ai.provider === 'heuristic_offline')
+            return false;
+        if (settings.ai.provider === 'ollama')
+            return true; // local model — no key required
+        return Boolean(this.settingsService.getApiKey());
+    }
+    llmHealingLabel() {
+        const settings = this.settingsService.getSettings();
+        const model = settings.ai?.model ? ` (${settings.ai.model})` : '';
+        return `${settings.ai?.provider}${model}`;
+    }
+    /**
+     * Shared raw-text LLM call used by the healing engine. Unlike `queryConfiguredLLM`
+     * (which parses strict JSON for classification), this returns the raw text so the
+     * caller can extract the JSON object with a tolerant parser.
+     */
+    async queryHealingLLM(prompt) {
+        const settings = this.settingsService.getSettings();
+        const apiKey = this.settingsService.getApiKey();
+        const provider = settings.ai.provider;
+        const model = settings.ai.model;
+        const endpoint = settings.ai.endpoint;
+        const signal = AbortSignal.timeout(HEALING_LLM_TIMEOUT_MS);
+        if (provider === 'gemini') {
+            if (!apiKey)
+                throw new Error('Gemini selected but no API key is configured (Settings → AI Provider).');
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-2.5-flash'}:generateContent?key=${apiKey}`;
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal,
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: { responseMimeType: 'application/json' },
+                }),
+            });
+            const data = await resp.json().catch(() => null);
+            if (!resp.ok) {
+                throw new Error(`Gemini HTTP ${resp.status}: ${data?.error?.message || 'request failed'}`);
+            }
+            const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!text)
+                throw new Error('Gemini returned an empty response.');
+            return text;
+        }
+        if (provider === 'openai' || provider === 'ollama') {
+            const isOllama = provider === 'ollama';
+            if (!isOllama && !apiKey) {
+                throw new Error('OpenAI selected but no API key is configured (Settings → AI Provider).');
+            }
+            const baseUrl = isOllama
+                ? endpoint || 'http://localhost:11434/v1'
+                : endpoint || 'https://api.openai.com/v1';
+            const resp = await fetch(`${baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+                },
+                signal,
+                body: JSON.stringify({
+                    model: model || (isOllama ? 'llama3.1' : 'gpt-4o-mini'),
+                    messages: [{ role: 'user', content: prompt }],
+                    response_format: { type: 'json_object' },
+                }),
+            });
+            const data = await resp.json().catch(() => null);
+            if (!resp.ok) {
+                throw new Error(`${isOllama ? 'Ollama' : 'OpenAI'} HTTP ${resp.status}: ${data?.error?.message || 'request failed'}`);
+            }
+            const text = data?.choices?.[0]?.message?.content;
+            if (!text)
+                throw new Error(`${isOllama ? 'Ollama' : 'OpenAI'} returned an empty response.`);
+            return text;
+        }
+        throw new Error(`Provider "${provider}" cannot generate fixes.`);
+    }
+    /** Tolerant JSON extraction — LLMs love wrapping payloads in markdown fences. */
+    extractJsonObject(raw) {
+        let text = raw.trim();
+        text = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+        const first = text.indexOf('{');
+        const last = text.lastIndexOf('}');
+        if (first === -1 || last <= first) {
+            throw new Error('The AI response did not contain a JSON object.');
+        }
+        return JSON.parse(text.slice(first, last + 1));
+    }
+    /**
+     * Sanity-check an AI-produced spec BEFORE it is allowed onto disk. The hardest
+     * requirement: the original test title must survive so `--grep <title>` validation
+     * actually exercises the repaired test instead of silently matching zero tests.
+     */
+    assertRepairedSpecShape(fixedCode, failure) {
+        if (typeof fixedCode !== 'string') {
+            throw new Error('AI response is missing the string field "fixedCode".');
+        }
+        if (fixedCode.trim().length < 40) {
+            throw new Error('AI returned a suspiciously short spec — refusing to apply it.');
+        }
+        if (fixedCode.length > 256 * 1024) {
+            throw new Error('AI returned a spec larger than 256 KB — refusing to apply it.');
+        }
+        if (!fixedCode.includes('test(')) {
+            throw new Error('AI output does not contain a Playwright test() block — refusing to apply it.');
+        }
+        if (!fixedCode.includes(failure.test_title)) {
+            throw new Error(`AI output dropped the original test title ("${String(failure.test_title).slice(0, 80)}") — refusing to apply it (validation could not target the test).`);
+        }
+    }
+    buildHealPrompt(failure, originalCode, relSpec) {
+        const clipped = originalCode.length > SPEC_PROMPT_LIMIT
+            ? `${originalCode.slice(0, SPEC_PROMPT_LIMIT)}\n/* … spec truncated by Control Center for LLM size limit … */`
+            : originalCode;
+        const errExcerpt = `${failure.error_message || ''}\n${(failure.stack_trace || '').slice(0, 2500)}`.trim();
+        return `You are a senior Playwright automation engineer repairing a failing end-to-end test. Produce the SMALLEST change that makes the test pass its objective. You may adjust locators, waits, steps, and — when the failure output proves them factually wrong — validations/assertions. You may ADD missing steps (navigation, login, downloads, explicit waits).
+
+Return ONLY a strict JSON object (no markdown fences) with keys:
+{"fixedCode": "<COMPLETE corrected spec file content, including imports>", "explanation": "<one paragraph describing the root cause and the fix>", "changes": ["<short change 1>", "<short change 2>"]}
+
+Hard rules:
+- fixedCode must be the ENTIRE spec file, never a diff.
+- Keep the test title exactly as it is: ${failure.test_title}
+- Never delete, skip, or weaken an expect() merely to make the test green; only change an expectation when the failure output proves it wrong, and explain why in the changes list.
+- Prefer resilient locators (getByRole, getByTestId, getByLabel, getByPlaceholder, getByText) over CSS/XPath. Scope with .first() only when the log shows strict-mode ambiguity.
+- For timeouts/races, add explicit waits (expect(...).toBeVisible(), page.waitFor(), waitForLoadState, expect.poll) — not bare sleeps.
+- Do NOT change business data, URLs, credentials or environment wiring unless the error proves them wrong.
+- Do NOT add test.skip, test.fixme, or new tests.
+- Keep all existing imports you still need; add any new ones you require.
+
+Failure context:
+- Test title: ${failure.test_title}
+- Spec: ${relSpec}
+- Category: ${failure.category} — ${failure.classification}
+- Probable root cause: ${failure.probable_root_cause}
+- Recommended action: ${failure.recommended_action}
+- Error / stack (ANSI-stripped):
+${errExcerpt}
+
+Spec file content:
+---
+${clipped}
+---`;
+    }
+    buildRepairPrompt(failure, originalCode, previousFix, validationLog, attempt) {
+        const clipped = originalCode.length > SPEC_PROMPT_LIMIT
+            ? `${originalCode.slice(0, SPEC_PROMPT_LIMIT)}\n/* … spec truncated by Control Center for LLM size limit … */`
+            : originalCode;
+        const clippedFix = previousFix.length > SPEC_PROMPT_LIMIT
+            ? `${previousFix.slice(0, SPEC_PROMPT_LIMIT)}\n/* … truncated … */`
+            : previousFix;
+        return `Your previous candidate fix for this Playwright test FAILED validation (repair attempt ${attempt}). Read the validation output, determine what is still wrong, and produce a NEW complete spec file that repairs the remaining failure. Same rules as before (complete file, same test title "${failure.test_title}", no weakened expects, no test.skip).
+
+Return ONLY a strict JSON object: {"fixedCode": "<COMPLETE corrected spec file>", "explanation": "<what was still failing and what you changed>", "changes": ["<change 1>"]}
+
+Original spec before any healing:
+---
+${clipped}
+---
+
+Your previous candidate fix (failed validation):
+---
+${clippedFix}
+---
+
+Validation output (ANSI-stripped, tail):
+---
+${validationLog.slice(-6000)}
+---`;
+    }
+    async generateFixWithLLM(failure, originalCode, relSpec) {
+        const raw = await this.queryHealingLLM(this.buildHealPrompt(failure, originalCode, relSpec));
+        const parsed = this.extractJsonObject(raw);
+        this.assertRepairedSpecShape(parsed?.fixedCode, failure);
+        return {
+            fixedCode: parsed.fixedCode,
+            explanation: String(parsed.explanation || 'AI-generated repair.'),
+            changes: Array.isArray(parsed.changes) ? parsed.changes.map((c) => String(c)) : [],
+        };
+    }
+    async repairFixWithLLM(failure, originalCode, previousFix, validationLog, attempt) {
+        const raw = await this.queryHealingLLM(this.buildRepairPrompt(failure, originalCode, previousFix, validationLog, attempt));
+        const parsed = this.extractJsonObject(raw);
+        this.assertRepairedSpecShape(parsed?.fixedCode, failure);
+        return {
+            fixedCode: parsed.fixedCode,
+            explanation: String(parsed.explanation || 'AI-generated repair revision.'),
+            changes: Array.isArray(parsed.changes) ? parsed.changes.map((c) => String(c)) : [],
+        };
+    }
     async generateHealingProposal(failureId, onProgress) {
         this.assertHealingEnabled();
         this.emit(onProgress, 'generate', 'Loading failure analysis…', 'system', { failureId });
@@ -320,24 +521,53 @@ class FailureIntelligenceService {
             throw new Error(`Target spec file not found: ${safeFilePath}`);
         }
         const originalCode = fs_1.default.readFileSync(safeFilePath, 'utf-8');
+        const relSpec = path_1.default.relative(project.root_path, safeFilePath).replace(/\\/g, '/');
         let proposedCode = originalCode;
-        let explanation = 'Added explicit visibility wait before interaction to eliminate timing race condition.';
-        if (/strict mode violation/i.test(failure.error_message)) {
-            proposedCode = originalCode.replace(/(await\s+page\.(?:locator|getByText|getByRole|getByTestId|getByLabel|getByPlaceholder|getByTitle|getByAltText)\([^)]*\))(\.(?:click|dblclick|fill|press|check|uncheck|hover|selectOption|setInputFiles)\()/g, '$1.first()$2');
-            this.emit(onProgress, 'generate', 'Pattern match: strict mode violation → scoping ambiguous locators to .first()', 'system', { failureId });
-            explanation =
-                'Resolved Playwright strict mode violation by scoping the ambiguous locator to `.first()` while preserving all business assertions.';
+        let explanation = '';
+        // 1) Preferred path: a configured AI provider repairs the test directly from the
+        //    failure context (locators, waits, missing steps, wrong validations).
+        const llmAvailable = this.isHealingLLMAvailable();
+        if (llmAvailable) {
+            try {
+                this.emit(onProgress, 'generate', `AI engine (${this.llmHealingLabel()}) is generating a repair — sending the spec and failure context…`, 'system', { failureId });
+                const fix = await this.generateFixWithLLM(failure, originalCode, relSpec);
+                proposedCode = fix.fixedCode;
+                const changesList = fix.changes.length ? `\nChanges:\n- ${fix.changes.join('\n- ')}` : '';
+                explanation = `[AI ${this.llmHealingLabel()}] ${fix.explanation}${changesList}`;
+                this.emit(onProgress, 'generate', `AI repair ready — ${fix.explanation.slice(0, 180)}`, 'system', { failureId });
+            }
+            catch (llmErr) {
+                this.emit(onProgress, 'error', `AI generation failed (${llmErr?.message || llmErr}) — falling back to deterministic patterns.`, 'stderr', { failureId });
+            }
         }
-        else if (/Timeout \d+ms exceeded/i.test(failure.error_message)) {
-            proposedCode = originalCode.replace(/(await\s+page\.goto\([^)]+\);)/g, "$1\n  await page.waitForLoadState('domcontentloaded');");
-            this.emit(onProgress, 'generate', "Pattern match: navigation timeout → inserting waitForLoadState('domcontentloaded') after goto()", 'system', { failureId });
-            explanation =
-                'Added `await page.waitForLoadState(\'domcontentloaded\')` after navigation to prevent premature element interaction.';
+        else {
+            this.emit(onProgress, 'generate', 'No AI provider configured (Settings → AI Provider) — using the deterministic offline engine.', 'system', { failureId });
         }
+        // 2) Deterministic fallback — only runs when the AI path did not produce code.
         if (proposedCode === originalCode) {
-            proposedCode = `// [AI Healing Suggestion]: Verify resilient data-testid or role locator for "${failure.test_title}"\n${originalCode}`;
-            this.emit(onProgress, 'generate', 'No deterministic pattern matched — flagging for manual QA review', 'system', { failureId });
-            explanation = 'Flagged target test block with locator stabilization guidance for manual QA review.';
+            if (/strict mode violation/i.test(failure.error_message)) {
+                proposedCode = originalCode.replace(/(await\s+page\.(?:locator|getByText|getByRole|getByTestId|getByLabel|getByPlaceholder|getByTitle|getByAltText)\([^)]*\))(\.(?:click|dblclick|fill|press|check|uncheck|hover|selectOption|setInputFiles)\()/g, '$1.first()$2');
+                if (proposedCode !== originalCode) {
+                    this.emit(onProgress, 'generate', 'Pattern match: strict mode violation → scoping ambiguous locators to .first()', 'system', { failureId });
+                    explanation =
+                        'Resolved Playwright strict mode violation by scoping the ambiguous locator to `.first()` while preserving all business assertions.';
+                }
+            }
+            else if (/Timeout \d+ms exceeded/i.test(failure.error_message)) {
+                proposedCode = originalCode.replace(/(await\s+page\.goto\([^)]+\);)/g, "$1\n  await page.waitForLoadState('domcontentloaded');");
+                if (proposedCode !== originalCode) {
+                    this.emit(onProgress, 'generate', "Pattern match: navigation timeout → inserting waitForLoadState('domcontentloaded') after goto()", 'system', { failureId });
+                    explanation =
+                        'Added `await page.waitForLoadState(\'domcontentloaded\')` after navigation to prevent premature element interaction.';
+                }
+            }
+        }
+        // 3) Nothing worked — be honest rather than writing noise into the spec.
+        if (proposedCode === originalCode) {
+            this.emit(onProgress, 'generate', 'No automatic fix could be produced (AI unavailable/failed and no deterministic pattern applies) — the spec is left untouched; review the failure log for a manual repair or configure an AI provider.', 'system', { failureId });
+            explanation = llmAvailable
+                ? 'The AI provider was unable to produce a valid repair for this failure (see the activity log). Apply the changes manually or edit the Proposed Fix panel, then Re-validate (edited code).'
+                : 'No deterministic fix applies to this failure and no AI provider is configured. Configure Settings → AI Provider (Gemini / OpenAI / Ollama), or repair the spec manually.';
         }
         const proposal = {
             id: (0, uuid_1.v4)(),
@@ -368,8 +598,35 @@ class FailureIntelligenceService {
      */
     async generateAndValidate(failureId, onProgress) {
         const proposal = await this.generateHealingProposal(failureId, onProgress);
+        // No candidate fix was produced — running validation would only re-run the known-good
+        // broken test and misreport it as a healing failure. Skip and let the UI explain.
+        if (proposal.proposedCode === proposal.originalCode) {
+            this.emit(onProgress, 'done', 'No candidate fix was generated — validation skipped (the spec is unchanged on disk).', 'system', { proposalId: proposal.id, failureId });
+            return proposal;
+        }
         this.emit(onProgress, 'spawn', 'Auto-validating the candidate fix in the background…', 'system', { proposalId: proposal.id });
-        return this.validateProposal(proposal.id, undefined, onProgress);
+        let validated = await this.validateProposal(proposal.id, undefined, onProgress);
+        // Self-correction loop: feed the validation output back to the AI and revise.
+        // Deterministic fixes are not retried (same input → same output).
+        if (validated.validationStatus === 'validated_fail' && this.isHealingLLMAvailable()) {
+            const db = (0, db_1.getDb)();
+            const failure = db.prepare('SELECT * FROM failure_analyses WHERE id = ?').get(failureId);
+            const originalCode = validated.originalCode;
+            for (let attempt = 1; attempt <= MAX_REPAIR_ATTEMPTS && validated.validationStatus === 'validated_fail'; attempt++) {
+                this.emit(onProgress, 'generate', `AI repair attempt ${attempt}/${MAX_REPAIR_ATTEMPTS} — sending the validation log back to ${this.llmHealingLabel()}…`, 'system', { proposalId: proposal.id, failureId });
+                try {
+                    const repaired = await this.repairFixWithLLM(failure, originalCode, validated.proposedCode, validated.validationLog || '', attempt);
+                    const changesList = repaired.changes.length ? `\nChanges:\n- ${repaired.changes.join('\n- ')}` : '';
+                    db.prepare('UPDATE healing_proposals SET proposed_code = ?, explanation = ? WHERE id = ?').run(repaired.fixedCode, `[AI repair attempt ${attempt}/${MAX_REPAIR_ATTEMPTS}] ${repaired.explanation}${changesList}`, proposal.id);
+                    validated = await this.validateProposal(proposal.id, undefined, onProgress);
+                }
+                catch (repairErr) {
+                    this.emit(onProgress, 'error', `AI repair attempt ${attempt}/${MAX_REPAIR_ATTEMPTS} failed: ${repairErr?.message || repairErr}`, 'stderr', { proposalId: proposal.id, failureId });
+                    break;
+                }
+            }
+        }
+        return validated;
     }
     async validateProposal(proposalId, codeOverride, onProgress) {
         this.assertHealingEnabled();
@@ -390,8 +647,15 @@ class FailureIntelligenceService {
         try {
             const result = await this.runPlaywrightStreamed(project.root_path, [relSpec, '--grep', `(${escapedTitle})`, '--retries=0', '--workers=1', '--reporter=line'], { onProgress, proposalId, timeoutMs: 120000 });
             this.emit(onProgress, 'spawn', `Ran: ${result.executableLabel}`, 'system', { proposalId });
-            validationStatus = result.spawnError || result.exitCode !== 0 ? 'validated_fail' : 'validated_pass';
             validationLog = result.log;
+            if (/no tests found/i.test(validationLog)) {
+                validationLog +=
+                    '\n[Control Center] The --grep filter matched no tests (title mismatch or test block removed) — treated as validation failure.';
+                validationStatus = 'validated_fail';
+            }
+            else {
+                validationStatus = result.spawnError || result.exitCode !== 0 ? 'validated_fail' : 'validated_pass';
+            }
         }
         catch (err) {
             validationStatus = 'validated_fail';

@@ -94,7 +94,13 @@ export const ArtifactsPage: React.FC<{
         setArtifacts(list);
         setLastScanAt(new Date());
         setSelected((current) => {
-          if (current && list.some((a) => a.relativePath === current.relativePath)) return current;
+          // Always hand back the FRESH list entry so downstream consumers (mtime display
+          // and the preview effect, which keys off `selected`) reflect what is on disk
+          // right now — not the snapshot from when the file was first clicked.
+          if (current) {
+            const fresh = list.find((a) => a.relativePath === current.relativePath);
+            if (fresh) return fresh;
+          }
           return list[0] ?? null;
         });
       } catch (err: any) {
