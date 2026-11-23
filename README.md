@@ -1,4 +1,18 @@
-# Playwright Automation Control Center v1.3.2
+# Playwright Automation Control Center v1.4.0
+
+## What's New in v1.4.0 (self-heal rework: live logs, background pre-validation, highlighted diff, heal-all)
+
+1. **Live healer activity stream (`FailureIntelligenceService.ts`, `FailureAndHealingPage.tsx`)**: every heal operation (generate, validate, headed run, approve, rollback) now streams progress line-by-line over a new `healing:progress-event` channel — mirrored to Electron IPC and the HTTP bridge's SSE feed — and renders in an auto-scrolling **ACTIVITY** panel (phase chips, clear button) so you can watch the healer read the spec, patch it, spawn Playwright, and restore the file in real time. ANSI escape codes are stripped before anything hits the log or the database.
+2. **Background validation BEFORE the fix is shown (`generateAndValidate`)**: generating a remediation no longer shows unverified code. The engine applies the fix in-memory, spawns the project's local Playwright CLI against just that spec/test in the background (120 s cap, 16 MB output cap), then **restores the spec automatically** — the proposal is returned with a `validated_pass` / `validated_fail` badge and the full ANSI-free validation log attached. Spec-restore failures are CRITICAL: logged, and surfaced as a warning banner in the UI.
+3. **Highlighted fixed code (`FailureAndHealingPage.tsx`)**: the side-by-side editor was replaced by a **Highlight Diff** view — deterministic common prefix/suffix line diff with a `-old / +new` gutter, per-line `-`/`+` coloring, identical-run folding, and exact before/after line counts — next to the original spec. Toggle **Highlight Diff / Original** at the top of the panel; the edited code stays in a full-height editable textarea for tweaks before approval.
+4. **Accept changes & headed manual run**: **Approve & Apply** remains the explicit accept action (backup → write → audit), with **Run Headed** appearing after approval to execute the patched spec headed (`--headed --reporter=list`, workers=1, retries=0) as a manual verification. Pre-approval you can also **Watch Headed (tentative)** to see the fix run headlessly-failed → fixed without committing anything; the spec is restored in a `finally` afterwards.
+5. **Self-heal all eligible failures**: a **Self-Heal All Eligible (N)** button in the Failures header loops every healing-eligible failure that has no proposal yet, generates + auto-validates each in sequence, streams progress into the ACTIVITY panel, and jumps to the Self-Healing tab with the results. Per-test **Generate Remediation** still works independently.
+6. **Validation re-check with edits**: "Re-validate (edited code)" re-applies your edited code in-memory, re-runs the spec, restores it, and refreshes the badge/log — so manual tweaks are verified the same way as machine repairs.
+
+## Verification (all passing)
+- `npm run typecheck`, `npm run build`
+- Headless main-process E2E harness against a fixture Playwright project with a behavioral `@playwright/test` CLI stub: all previous checks plus `generateAndValidate` → `validated_pass` with the spec restored afterwards, the full phase stream (generate → write → spawn → output → restore → done) stripped of ANSI codes, and `runProposalHeaded` exit 0 with the spec auto-restored afterwards.
+- jsdom UI smoke test of the production bundle: every sidebar route mounts, Self-Heal All button count, auto-navigation to the Self-Healing view, ACTIVITY log rendering, batch-completion line, `VALIDATION PASSED` badge, `.first()` highlighted diff (default tab), Original/Highlight Diff toggle, pre-approval "Watch Headed (tentative)" → streamed result, "Re-validate (edited code)", post-approval "Run Headed".
 
 ## What's New in v1.3.2 (reports split, run identity, test artifacts, self-healing)
 

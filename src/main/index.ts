@@ -231,8 +231,16 @@ function registerIpcHandlers(): void {
     return artifactService.revealArtifact(projectId, relativePath);
   });
 
-  ipcMain.handle(IPC.FAILURE_ANALYZE_BATCH, (_, executionId: string) => {
-    return failureService.analyzeExecutionFailures(executionId);
+  const sendProgress = (event: Electron.IpcMainInvokeEvent, payload: any) => {
+    try {
+      event.sender.send(IPC.HEALING_PROGRESS_EVENT, payload);
+    } catch {
+      /* renderer gone */
+    }
+  };
+
+  ipcMain.handle(IPC.FAILURE_ANALYZE_BATCH, (event, executionId: string) => {
+    return failureService.analyzeExecutionFailures(executionId, (_, payload) => sendProgress(event, payload));
   });
 
   ipcMain.handle(IPC.FAILURE_LIST, (_, projectId: string) => {
@@ -244,25 +252,31 @@ function registerIpcHandlers(): void {
     return true;
   });
 
-  ipcMain.handle(IPC.HEALING_GENERATE, (_, failureId: string) => {
-    return failureService.generateHealingProposal(failureId);
+  // Generate now auto-validates in the background — the card the user sees already
+  // carries a validated_pass / validated_fail verdict instead of "pending".
+  ipcMain.handle(IPC.HEALING_GENERATE, (event, failureId: string) => {
+    return failureService.generateAndValidate(failureId, (_, payload) => sendProgress(event, payload));
   });
 
-  ipcMain.handle(IPC.HEALING_VALIDATE, (_, proposalId: string) => {
-    return failureService.validateProposal(proposalId);
+  ipcMain.handle(IPC.HEALING_VALIDATE, (event, proposalId: string, editedCode?: string) => {
+    return failureService.validateProposal(proposalId, editedCode, (_, payload) => sendProgress(event, payload));
   });
 
-  ipcMain.handle(IPC.HEALING_APPROVE_APPLY, (_, proposalId: string, editedCode?: string) => {
-    return failureService.approveAndApply(proposalId, editedCode);
+  ipcMain.handle(IPC.HEALING_APPROVE_APPLY, (event, proposalId: string, editedCode?: string) => {
+    return failureService.approveAndApply(proposalId, editedCode, (_, payload) => sendProgress(event, payload));
+  });
+
+  ipcMain.handle(IPC.HEALING_ROLLBACK, (event, proposalId: string) => {
+    return failureService.rollbackProposal(proposalId, (_, payload) => sendProgress(event, payload));
+  });
+
+  ipcMain.handle(IPC.HEALING_RUN_HEADED, (event, proposalId: string, editedCode?: string) => {
+    return failureService.runProposalHeaded(proposalId, editedCode, (_, payload) => sendProgress(event, payload));
   });
 
   ipcMain.handle(IPC.HEALING_REJECT, (_, proposalId: string) => {
     getDb().prepare(`UPDATE healing_proposals SET status = 'rejected' WHERE id = ?`).run(proposalId);
     return true;
-  });
-
-  ipcMain.handle(IPC.HEALING_ROLLBACK, (_, proposalId: string) => {
-    return failureService.rollbackProposal(proposalId);
   });
 
   ipcMain.handle(IPC.HEALING_LIST, (_, projectId: string) => {

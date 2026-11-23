@@ -197,23 +197,38 @@ export class LocalBridgeServer {
       case 'revealArtifact':
         return this.artifactService.revealArtifact(args[0], args[1]);
       case 'analyzeBatchFailures':
-        return this.failureService.analyzeExecutionFailures(args[0]);
+        return this.failureService.analyzeExecutionFailures(args[0], (_, payload) =>
+          this.broadcast('healing:progress-event', payload)
+        );
       case 'listFailures':
         return this.failureService.listFailures(args[0]);
       case 'reclassifyFailure':
         this.failureService.reclassifyFailure(args[0], args[1], args[2]);
         return true;
+      // Generate auto-validates in the background; progress lines stream to SSE subscribers.
       case 'generateHealingProposal':
-        return this.failureService.generateHealingProposal(args[0]);
+        return this.failureService.generateAndValidate(args[0], (_, payload) =>
+          this.broadcast('healing:progress-event', payload)
+        );
       case 'validateProposal':
-        return this.failureService.validateProposal(args[0]);
+        return this.failureService.validateProposal(args[0], args[1], (_, payload) =>
+          this.broadcast('healing:progress-event', payload)
+        );
       case 'approveAndApplyProposal':
-        return this.failureService.approveAndApply(args[0], args[1]);
+        return this.failureService.approveAndApply(args[0], args[1], (_, payload) =>
+          this.broadcast('healing:progress-event', payload)
+        );
+      case 'runProposalHeaded':
+        return this.failureService.runProposalHeaded(args[0], args[1], (_, payload) =>
+          this.broadcast('healing:progress-event', payload)
+        );
       case 'rejectProposal':
         getDb().prepare(`UPDATE healing_proposals SET status = 'rejected' WHERE id = ?`).run(args[0]);
         return true;
       case 'rollbackProposal':
-        return this.failureService.rollbackProposal(args[0]);
+        return this.failureService.rollbackProposal(args[0], (_, payload) =>
+          this.broadcast('healing:progress-event', payload)
+        );
       case 'listProposals':
         return this.failureService.listProposals(args[0]);
       case 'getFlakyTests':

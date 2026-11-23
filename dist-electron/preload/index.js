@@ -50,7 +50,15 @@ const controlCenterAPI = {
     listFailures: (projectId) => electron_1.ipcRenderer.invoke(ipcChannels_1.IPC.FAILURE_LIST, projectId),
     reclassifyFailure: (id, cat, cls) => electron_1.ipcRenderer.invoke(ipcChannels_1.IPC.FAILURE_RECLASSIFY, id, cat, cls),
     generateHealingProposal: (failureId) => electron_1.ipcRenderer.invoke(ipcChannels_1.IPC.HEALING_GENERATE, failureId),
-    validateProposal: (proposalId) => electron_1.ipcRenderer.invoke(ipcChannels_1.IPC.HEALING_VALIDATE, proposalId),
+    validateProposal: (proposalId, editedCode) => electron_1.ipcRenderer.invoke(ipcChannels_1.IPC.HEALING_VALIDATE, proposalId, editedCode),
+    runProposalHeaded: (proposalId, editedCode) => electron_1.ipcRenderer.invoke(ipcChannels_1.IPC.HEALING_RUN_HEADED, proposalId, editedCode),
+    onHealingProgress: (cb) => {
+        const listener = (_, evt) => cb(evt);
+        electron_1.ipcRenderer.on(ipcChannels_1.IPC.HEALING_PROGRESS_EVENT, listener);
+        return () => {
+            electron_1.ipcRenderer.removeListener(ipcChannels_1.IPC.HEALING_PROGRESS_EVENT, listener);
+        };
+    },
     approveAndApplyProposal: (proposalId, editedCode) => electron_1.ipcRenderer.invoke(ipcChannels_1.IPC.HEALING_APPROVE_APPLY, proposalId, editedCode),
     rejectProposal: (proposalId) => electron_1.ipcRenderer.invoke(ipcChannels_1.IPC.HEALING_REJECT, proposalId),
     rollbackProposal: (proposalId) => electron_1.ipcRenderer.invoke(ipcChannels_1.IPC.HEALING_ROLLBACK, proposalId),

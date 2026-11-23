@@ -201,8 +201,16 @@ function registerIpcHandlers() {
     electron_1.ipcMain.handle(ipcChannels_1.IPC.ARTIFACTS_REVEAL, (_, projectId, relativePath) => {
         return artifactService.revealArtifact(projectId, relativePath);
     });
-    electron_1.ipcMain.handle(ipcChannels_1.IPC.FAILURE_ANALYZE_BATCH, (_, executionId) => {
-        return failureService.analyzeExecutionFailures(executionId);
+    const sendProgress = (event, payload) => {
+        try {
+            event.sender.send(ipcChannels_1.IPC.HEALING_PROGRESS_EVENT, payload);
+        }
+        catch {
+            /* renderer gone */
+        }
+    };
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.FAILURE_ANALYZE_BATCH, (event, executionId) => {
+        return failureService.analyzeExecutionFailures(executionId, (_, payload) => sendProgress(event, payload));
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.FAILURE_LIST, (_, projectId) => {
         return failureService.listFailures(projectId);
@@ -211,21 +219,26 @@ function registerIpcHandlers() {
         failureService.reclassifyFailure(failureId, category, classification);
         return true;
     });
-    electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_GENERATE, (_, failureId) => {
-        return failureService.generateHealingProposal(failureId);
+    // Generate now auto-validates in the background — the card the user sees already
+    // carries a validated_pass / validated_fail verdict instead of "pending".
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_GENERATE, (event, failureId) => {
+        return failureService.generateAndValidate(failureId, (_, payload) => sendProgress(event, payload));
     });
-    electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_VALIDATE, (_, proposalId) => {
-        return failureService.validateProposal(proposalId);
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_VALIDATE, (event, proposalId, editedCode) => {
+        return failureService.validateProposal(proposalId, editedCode, (_, payload) => sendProgress(event, payload));
     });
-    electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_APPROVE_APPLY, (_, proposalId, editedCode) => {
-        return failureService.approveAndApply(proposalId, editedCode);
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_APPROVE_APPLY, (event, proposalId, editedCode) => {
+        return failureService.approveAndApply(proposalId, editedCode, (_, payload) => sendProgress(event, payload));
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_ROLLBACK, (event, proposalId) => {
+        return failureService.rollbackProposal(proposalId, (_, payload) => sendProgress(event, payload));
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_RUN_HEADED, (event, proposalId, editedCode) => {
+        return failureService.runProposalHeaded(proposalId, editedCode, (_, payload) => sendProgress(event, payload));
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_REJECT, (_, proposalId) => {
         (0, db_1.getDb)().prepare(`UPDATE healing_proposals SET status = 'rejected' WHERE id = ?`).run(proposalId);
         return true;
-    });
-    electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_ROLLBACK, (_, proposalId) => {
-        return failureService.rollbackProposal(proposalId);
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.HEALING_LIST, (_, projectId) => {
         return failureService.listProposals(projectId);
