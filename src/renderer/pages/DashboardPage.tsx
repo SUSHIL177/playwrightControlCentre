@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ResponsiveContainer,
   PieChart,
@@ -16,7 +16,6 @@ import {
 } from 'recharts';
 import { Play, AlertTriangle, CheckCircle2, Clock, Activity, ExternalLink, RefreshCw } from 'lucide-react';
 import { DiscoveredTest, ExecutionBatch, FailureAnalysisRecord, ProjectConfig } from '@shared/types';
-
 interface DashboardPageProps {
   project: ProjectConfig | null;
   tests: DiscoveredTest[];
@@ -34,6 +33,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   onQuickRun,
   onRefresh,
 }) => {
+  const [reportError, setReportError] = useState<string | null>(null);
+
   if (!project) {
     return (
       <div className="p-8 text-center text-slate-400">
@@ -111,7 +112,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </button>
           {latest && (
             <button
-              onClick={() => window.pwControlCenter.openReportInBrowser(latest.htmlReportPath)}
+              onClick={async () => {
+                setReportError(null);
+                try {
+                  await window.pwControlCenter.openReportInBrowser(latest.htmlReportPath);
+                } catch (e: any) {
+                  setReportError(e?.message || 'HTML report not found for the latest batch.');
+                }
+              }}
               className="px-3.5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold flex items-center gap-1.5"
             >
               <ExternalLink className="w-3.5 h-3.5" /> Open Latest HTML Report
@@ -126,8 +134,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         </div>
       </div>
 
+      {reportError && (
+        <div className="px-4 py-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs">
+          {reportError}
+        </div>
+      )}
+
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
         <KpiCard label="Discovered Tests" value={tests.length} icon={<CheckCircle2 className="w-4 h-4 text-sky-400" />} />
         <KpiCard label="Total Passed" value={totalPassed} icon={<CheckCircle2 className="w-4 h-4 text-emerald-400" />} />
         <KpiCard label="Total Failed" value={totalFailed} icon={<AlertTriangle className="w-4 h-4 text-rose-400" />} />

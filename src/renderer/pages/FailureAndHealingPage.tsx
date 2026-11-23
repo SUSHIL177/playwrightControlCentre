@@ -20,13 +20,18 @@ export const FailureAndHealingPage: React.FC<FailureAndHealingPageProps> = ({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [selectedProposal, setSelectedProposal] = useState<HealingProposal | null>(proposals[0] || null);
   const [editedCode, setEditedCode] = useState<string>('');
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleAnalyzeLatest = async () => {
     if (!latestBatchId) return;
     setBusyId('analyze');
+    setActionError(null);
     try {
       await window.pwControlCenter.analyzeBatchFailures(latestBatchId);
       await onRefresh();
+    } catch (err: any) {
+      console.error('[ControlCenter] Failure analysis failed:', err);
+      setActionError(err?.message || 'Failure analysis failed. Check the batch logs.');
     } finally {
       setBusyId(null);
     }
@@ -34,11 +39,15 @@ export const FailureAndHealingPage: React.FC<FailureAndHealingPageProps> = ({
 
   const handleGenerateProposal = async (failureId: string) => {
     setBusyId(failureId);
+    setActionError(null);
     try {
       const p = await window.pwControlCenter.generateHealingProposal(failureId);
       await onRefresh();
       setSelectedProposal(p);
       setEditedCode(p.proposedCode);
+    } catch (err: any) {
+      console.error('[ControlCenter] Proposal generation failed:', err);
+      setActionError(err?.message || 'Unable to generate a healing proposal.');
     } finally {
       setBusyId(null);
     }
@@ -66,9 +75,16 @@ export const FailureAndHealingPage: React.FC<FailureAndHealingPageProps> = ({
           )}
         </div>
 
+        {actionError && (
+          <div className="px-4 py-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs">
+            {actionError}
+          </div>
+        )}
+
         {failures.length === 0 ? (
           <div className="bg-pw-panel border border-pw-border rounded-xl p-8 text-center text-sm text-slate-400">
-            No analyzed failure records yet. Execute tests and click <strong className="text-sky-400">Analyze Latest Batch Failures</strong>.
+            No analyzed failure records yet. Execute tests — failures are analyzed automatically after each run — or click{' '}
+            <strong className="text-sky-400">Analyze Latest Batch Failures</strong>.
           </div>
         ) : (
           <div className="space-y-4">
@@ -85,7 +101,7 @@ export const FailureAndHealingPage: React.FC<FailureAndHealingPageProps> = ({
                       </span>
                     </div>
                     <h3 className="font-bold text-white text-sm mt-2">{f.testTitle}</h3>
-                    <p className="text-xs font-mono text-slate-400">{f.filePath}</p>
+                    <p className="text-xs font-mono text-slate-400 break-all">{f.filePath}</p>
                   </div>
 
                   {f.healingEligible ? (
@@ -137,6 +153,12 @@ export const FailureAndHealingPage: React.FC<FailureAndHealingPageProps> = ({
         </p>
       </div>
 
+      {actionError && (
+        <div className="px-4 py-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs">
+          {actionError}
+        </div>
+      )}
+
       {!active ? (
         <div className="bg-pw-panel border border-pw-border rounded-xl p-8 text-center text-sm text-slate-400">
           No healing proposals generated yet. Generate a fix from <strong className="text-sky-400">Failure Intelligence</strong>.
@@ -169,14 +191,21 @@ export const FailureAndHealingPage: React.FC<FailureAndHealingPageProps> = ({
                 <h3 className="font-bold text-white text-sm">{active.testTitle}</h3>
                 <p className="text-xs text-sky-300 mt-0.5">{active.explanation}</p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={async () => {
                     setBusyId('validate');
-                    const updated = await window.pwControlCenter.validateProposal(active.id);
-                    setSelectedProposal(updated);
-                    await onRefresh();
-                    setBusyId(null);
+                    setActionError(null);
+                    try {
+                      const updated = await window.pwControlCenter.validateProposal(active.id);
+                      setSelectedProposal(updated);
+                      await onRefresh();
+                    } catch (err: any) {
+                      console.error('[ControlCenter] Validation failed:', err);
+                      setActionError(err?.message || 'Validation run failed.');
+                    } finally {
+                      setBusyId(null);
+                    }
                   }}
                   className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1"
                 >
@@ -186,12 +215,18 @@ export const FailureAndHealingPage: React.FC<FailureAndHealingPageProps> = ({
 
                 <button
                   onClick={async () => {
-                    const updated = await window.pwControlCenter.approveAndApplyProposal(
-                      active.id,
-                      editedCode || active.proposedCode
-                    );
-                    setSelectedProposal(updated);
-                    await onRefresh();
+                    setActionError(null);
+                    try {
+                      const updated = await window.pwControlCenter.approveAndApplyProposal(
+                        active.id,
+                        editedCode || active.proposedCode
+                      );
+                      setSelectedProposal(updated);
+                      await onRefresh();
+                    } catch (err: any) {
+                      console.error('[ControlCenter] Apply failed:', err);
+                      setActionError(err?.message || 'Failed to apply the proposed fix.');
+                    }
                   }}
                   className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1"
                 >
@@ -201,9 +236,15 @@ export const FailureAndHealingPage: React.FC<FailureAndHealingPageProps> = ({
                 {active.status === 'approved' && (
                   <button
                     onClick={async () => {
-                      const updated = await window.pwControlCenter.rollbackProposal(active.id);
-                      setSelectedProposal(updated);
-                      await onRefresh();
+                      setActionError(null);
+                      try {
+                        const updated = await window.pwControlCenter.rollbackProposal(active.id);
+                        setSelectedProposal(updated);
+                        await onRefresh();
+                      } catch (err: any) {
+                        console.error('[ControlCenter] Rollback failed:', err);
+                        setActionError(err?.message || 'Failed to roll back the applied fix.');
+                      }
                     }}
                     className="px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold flex items-center gap-1"
                   >
@@ -213,8 +254,14 @@ export const FailureAndHealingPage: React.FC<FailureAndHealingPageProps> = ({
 
                 <button
                   onClick={async () => {
-                    await window.pwControlCenter.rejectProposal(active.id);
-                    await onRefresh();
+                    setActionError(null);
+                    try {
+                      await window.pwControlCenter.rejectProposal(active.id);
+                      await onRefresh();
+                    } catch (err: any) {
+                      console.error('[ControlCenter] Reject failed:', err);
+                      setActionError(err?.message || 'Failed to reject the proposal.');
+                    }
                   }}
                   className="px-3 py-1.5 rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 text-xs font-semibold flex items-center gap-1"
                 >

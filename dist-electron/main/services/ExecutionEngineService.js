@@ -17,6 +17,36 @@ const ANSI_STRIP = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 class ExecutionEngineService {
     activeProcess = null;
     activeExecutionId = null;
+    mapBatchRow(row) {
+        return {
+            id: row.id,
+            projectId: row.project_id,
+            description: row.description,
+            mode: row.mode,
+            environment: row.environment,
+            browsers: (() => {
+                try {
+                    return JSON.parse(row.browsers || '["chromium"]');
+                }
+                catch {
+                    return ['chromium'];
+                }
+            })(),
+            tag: row.tag || undefined,
+            status: row.status,
+            totalTests: row.total_tests,
+            passed: row.passed,
+            failed: row.failed,
+            skipped: row.skipped,
+            timedOut: row.timed_out,
+            flaky: row.flaky,
+            startTime: row.start_time,
+            endTime: row.end_time || undefined,
+            durationMs: row.duration_ms,
+            htmlReportPath: row.html_report_path,
+            jsonReportPath: row.json_report_path,
+        };
+    }
     isRunning() {
         return this.activeProcess !== null;
     }
@@ -36,27 +66,7 @@ class ExecutionEngineService {
             .all(projectId);
         const batchMap = new Map();
         for (const r of rows) {
-            batchMap.set(r.id, {
-                id: r.id,
-                projectId: r.project_id,
-                description: r.description,
-                mode: r.mode,
-                environment: r.environment,
-                browsers: JSON.parse(r.browsers),
-                tag: r.tag || undefined,
-                status: r.status,
-                totalTests: r.total_tests,
-                passed: r.passed,
-                failed: r.failed,
-                skipped: r.skipped,
-                timedOut: r.timed_out,
-                flaky: r.flaky,
-                startTime: r.start_time,
-                endTime: r.end_time,
-                durationMs: r.duration_ms,
-                htmlReportPath: r.html_report_path,
-                jsonReportPath: r.json_report_path,
-            });
+            batchMap.set(r.id, this.mapBatchRow(r));
         }
         // Reconcile any execution folders on disk that have results.json or html-report/index.html
         const executionsRoot = path_1.default.join(electron_1.app.getPath('userData'), 'executions');
@@ -214,6 +224,23 @@ class ExecutionEngineService {
             shell: !useDirectNode && process.platform === 'win32',
         });
         this.activeProcess = child;
+        let spawnErrorHandled = false;
+        // A failed spawn (missing node/npx, bad cwd, EMFILE …) never emits 'close' on some platforms.
+        // Surface it as a failed batch + completion event so the UI never gets stuck in "EXECUTING".
+        child.on('error', (spawnErr) => {
+            if (spawnErrorHandled)
+                return;
+            spawnErrorHandled = true;
+            this.activeProcess = null;
+            this.activeExecutionId = null;
+            const endTime = new Date().toISOString();
+            const durationMs = Math.max(0, new Date(endTime).getTime() - new Date(startTime).getTime());
+            db.prepare(`UPDATE execution_batches SET status = 'failed', end_time = ?, duration_ms = ? WHERE id = ?`).run(endTime, durationMs, executionId);
+            const failedBatch = this.mapBatchRow(db.prepare('SELECT * FROM execution_batches WHERE id = ?').get(executionId));
+            emitLog('system', `\n[Control Center] Execution ${executionId} failed to start: ${spawnErr.message}\n`);
+            mainWindow?.webContents.send(ipcChannels_1.IPC.EXEC_COMPLETED_EVENT, failedBatch);
+            onEvent?.(ipcChannels_1.IPC.EXEC_COMPLETED_EVENT, failedBatch);
+        });
         child.stdout?.on('data', (chunk) => {
             const str = chunk.toString('utf-8');
             capturedStdout.push(str);
@@ -223,9 +250,17 @@ class ExecutionEngineService {
             emitLog('stderr', chunk.toString('utf-8'));
         });
         child.on('close', (code) => {
+            if (spawnErrorHandled)
+                return;
             this.activeProcess = null;
             this.activeExecutionId = null;
-            const completedBatch = this.finalizeExecution(executionId, project.id, project.root_path, jsonReportFile, htmlReportDir, capturedStdout.join(''), startTime, code);
+            const completedBatch = this.finalizeExecution(executionId, project.id, project.root_path, jsonReportFile, htmlReportDir, capturedStdout.join(''), startTime, code, {
+                description,
+                mode: options.mode,
+                environment: batch.environment,
+                browsers,
+                tag: options.tag,
+            });
             emitLog('system', `\n[Control Center] Execution ${executionId} completed: ${completedBatch.passed} passed, ${completedBatch.failed} failed, ${completedBatch.skipped} skipped (${(completedBatch.durationMs / 1000).toFixed(1)}s).\n`);
             mainWindow?.webContents.send(ipcChannels_1.IPC.EXEC_COMPLETED_EVENT, completedBatch);
             onEvent?.(ipcChannels_1.IPC.EXEC_COMPLETED_EVENT, completedBatch);
@@ -238,7 +273,7 @@ class ExecutionEngineService {
         (0, tree_kill_1.default)(this.activeProcess.pid, 'SIGTERM');
         return true;
     }
-    finalizeExecution(executionId, projectId, projectRoot, jsonReportFile, htmlReportDir, rawStdout, startTimeIso, exitCode) {
+    finalizeExecution(executionId, projectId, projectRoot, jsonReportFile, htmlReportDir, rawStdout, startTimeIso, exitCode, originals) {
         const db = (0, db_1.getDb)();
         const endTime = new Date().toISOString();
         const durationMs = Math.max(0, new Date(endTime).getTime() - new Date(startTimeIso).getTime());
@@ -258,11 +293,31 @@ class ExecutionEngineService {
         if (resolvedJsonFile) {
             try {
                 const raw = JSON.parse(fs_1.default.readFileSync(resolvedJsonFile, 'utf-8'));
+                // Playwright's JSON reporter emits spec.file relative to the config rootDir/testDir
+                // (observed: bare "sample.spec.ts" for testDir './tests'), NOT necessarily relative to
+                // the project root. Resolve against both so per-test paths match discovery.
+                const projectRow = db
+                    .prepare('SELECT test_dir FROM projects WHERE id = ?')
+                    .get(projectId);
+                const configuredTestDir = projectRow?.test_dir || 'tests';
+                const resolveSpecPath = (rawFile) => {
+                    if (!rawFile)
+                        return projectRoot;
+                    if (path_1.default.isAbsolute(rawFile))
+                        return rawFile;
+                    const fromRoot = path_1.default.join(projectRoot, rawFile);
+                    if (fs_1.default.existsSync(fromRoot))
+                        return fromRoot;
+                    const fromTestDir = path_1.default.join(projectRoot, configuredTestDir, rawFile);
+                    if (fs_1.default.existsSync(fromTestDir))
+                        return fromTestDir;
+                    return fromRoot;
+                };
                 const walkSuite = (suite, ancestors) => {
                     const nextAncestors = suite.title && !suite.file ? [...ancestors, suite.title] : ancestors;
                     for (const spec of suite.specs || []) {
                         const rawFile = spec.file || suite.file || '';
-                        const fullPath = path_1.default.isAbsolute(rawFile) ? rawFile : path_1.default.join(projectRoot, rawFile);
+                        const fullPath = resolveSpecPath(rawFile);
                         const relPath = path_1.default.relative(projectRoot, fullPath).replace(/\\/g, '/');
                         const folderPath = path_1.default.dirname(relPath).replace(/\\/g, '/');
                         for (const t of spec.tests || []) {
@@ -297,6 +352,10 @@ class ExecutionEngineService {
                             const video = attachments.find((a) => a.contentType?.startsWith('video/'))?.path;
                             const trace = attachments.find((a) => a.name === 'trace' || a.path?.endsWith('.zip'))?.path;
                             const errorObj = lastAttempt.error || (lastAttempt.errors && lastAttempt.errors[0]) || {};
+                            // Playwright embeds ANSI color codes in JSON error messages/stacks — strip them
+                            // so stored text stays machine-classifiable and human-readable in the UI.
+                            const errorMessage = typeof errorObj.message === 'string' ? errorObj.message.replace(ANSI_STRIP, '') : undefined;
+                            const stackTrace = typeof errorObj.stack === 'string' ? errorObj.stack.replace(ANSI_STRIP, '') : undefined;
                             const uniqueKey = `${relPath}::${nextAncestors.join(' > ')}::${spec.title}`;
                             const testId = Buffer.from(uniqueKey).toString('base64url');
                             const totalTestDuration = attempts.reduce((acc, a) => acc + (a.duration || 0), 0);
@@ -313,8 +372,8 @@ class ExecutionEngineService {
                                 status,
                                 durationMs: totalTestDuration,
                                 retry: Math.max(0, attempts.length - 1),
-                                errorMessage: errorObj.message,
-                                stackTrace: errorObj.stack,
+                                errorMessage,
+                                stackTrace,
                                 screenshotPath: screenshot,
                                 videoPath: video,
                                 tracePath: trace,
@@ -389,12 +448,15 @@ class ExecutionEngineService {
         const totalTests = results.length;
         const finalStatus = exitCode === null ? 'stopped' : failed > 0 ? 'failed' : 'completed';
         const tx = db.transaction(() => {
+            // When the batch row already exists (normal live-run path) its user-facing metadata
+            // (description / mode / environment / browsers / tag) is preserved via the DO UPDATE clause.
+            // The INSERT branch only fires for crash-recovery hydration from disk.
             db.prepare(`
         INSERT INTO execution_batches (
           id, project_id, description, mode, environment, browsers, tag, status,
           total_tests, passed, failed, skipped, timed_out, flaky, start_time,
           end_time, duration_ms, html_report_path, json_report_path
-        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
           total_tests = excluded.total_tests,
@@ -405,8 +467,10 @@ class ExecutionEngineService {
           flaky = excluded.flaky,
           end_time = excluded.end_time,
           duration_ms = excluded.duration_ms,
-          html_report_path = excluded.html_report_path
-      `).run(executionId, projectId, `Execution ${executionId.slice(-6)}`, 'full', 'staging', JSON.stringify(['chromium']), finalStatus, totalTests, passed, failed, skipped, timedOut, flaky, startTimeIso, endTime, durationMs, isolatedIndex, jsonReportFile);
+          html_report_path = excluded.html_report_path,
+          json_report_path = excluded.json_report_path,
+          tag = COALESCE(excluded.tag, tag)
+      `).run(executionId, projectId, originals?.description || `Execution ${executionId.slice(-6)}`, originals?.mode || 'full', originals?.environment || 'staging', JSON.stringify(originals?.browsers || ['chromium']), originals?.tag || null, finalStatus, totalTests, passed, failed, skipped, timedOut, flaky, startTimeIso, endTime, durationMs, isolatedIndex, jsonReportFile);
             db.prepare('DELETE FROM test_results WHERE execution_id = ?').run(executionId);
             const insertResult = db.prepare(`
         INSERT INTO test_results (
@@ -415,38 +479,23 @@ class ExecutionEngineService {
           error_message, stack_trace, screenshot_path, video_path, trace_path, timestamp
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
+            // Match discovered tests on title + file (absolute or project-relative) so identically-titled
+            // tests in different spec files do not stomp each other's last_status.
             const updateDiscovered = db.prepare(`
         UPDATE discovered_tests SET last_status = ?, last_duration_ms = ?, retry_count = ?
-        WHERE project_id = ? AND title = ?
+        WHERE project_id = ? AND title = ? AND (file_path = ? OR relative_path = ?)
       `);
             for (const r of results) {
                 insertResult.run(r.id, r.executionId, r.projectId, r.testId, r.testTitle, r.fullTitle, r.filePath, r.folderPath, r.browser, r.status, r.durationMs, r.retry, r.errorMessage || null, r.stackTrace || null, r.screenshotPath || null, r.videoPath || null, r.tracePath || null, r.timestamp);
-                updateDiscovered.run(r.status, r.durationMs, r.retry, projectId, r.testTitle);
+                const relMatch = path_1.default.isAbsolute(r.filePath)
+                    ? path_1.default.relative(projectRoot, r.filePath).replace(/\\/g, '/')
+                    : r.filePath.replace(/\\/g, '/');
+                updateDiscovered.run(r.status, r.durationMs, r.retry, projectId, r.testTitle, r.filePath, relMatch);
             }
         });
         tx();
         const row = db.prepare('SELECT * FROM execution_batches WHERE id = ?').get(executionId);
-        return {
-            id: row.id,
-            projectId: row.project_id,
-            description: row.description,
-            mode: row.mode,
-            environment: row.environment,
-            browsers: JSON.parse(row.browsers),
-            tag: row.tag || undefined,
-            status: row.status,
-            totalTests: row.total_tests,
-            passed: row.passed,
-            failed: row.failed,
-            skipped: row.skipped,
-            timedOut: row.timed_out,
-            flaky: row.flaky,
-            startTime: row.start_time,
-            endTime: row.end_time,
-            durationMs: row.duration_ms,
-            htmlReportPath: row.html_report_path,
-            jsonReportPath: row.json_report_path,
-        };
+        return this.mapBatchRow(row);
     }
 }
 exports.ExecutionEngineService = ExecutionEngineService;

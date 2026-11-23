@@ -1,4 +1,22 @@
-# Playwright Automation Control Center v1.2.0
+# Playwright Automation Control Center v1.3.1
+
+## Root-Cause Fixes in v1.3.1 (execution completion, live telemetry, reports)
+
+1. **Crash-on-refresh killed every module after a run (`ProjectDiscoveryService.ts`)**: `buildFolderTree()` read `project.rootPath` from a raw SQLite row (snake_case), so `path.join(undefined, …)` threw → the `tests:get-tree` RPC rejected → `Promise.all` in the renderer rejected → **no state ever updated**. This single defect caused *Dashboard shows 0s after batch completion*, *Test Explorer shows 0 tests*, and *Reports table never displays new batches*. Fixed to `project.root_path`.
+2. **All-or-nothing data loading (`App.tsx`)**: `loadProjectData` now loads each feed independently with per-request fallbacks — one failing module can no longer blank the Dashboard, Explorer, Reports, Failures, or Sidebar badges. Deleting/re-importing projects also re-selects a valid active project instead of pointing at a ghost.
+3. **Playwright JSON path resolution (`ExecutionEngineService.ts`)**: the JSON reporter emits `spec.file` relative to the *testDir* (e.g. `sample.spec.ts` for `testDir: './tests'`), not the project root — so `test_results.file_path` pointed at non-existent files and `discovered_tests.last_status` never updated. The engine now resolves both base directories, and "Last Status" updates match on title **and** file (absolute or relative) so same-titled tests in different specs don't stomp each other.
+4. **Spawn failure no longer wedges the UI (`ExecutionEngineService.ts`)**: a failed `spawn` (missing node/npx) previously left the renderer stuck in "EXECUTING" forever. The engine now finalizes the batch as `failed`, emits `exec:completed-event`, and every module recovers automatically.
+5. **Auto-population after completion (`App.tsx` + pages)**: on `exec:completed-event` the app now (a) refreshes all feeds, (b) auto-analyzes failures *offline-safely* (deterministic heuristic engine; external AI provider analysis stays manual), and (c) bumps an `executionVersion` counter so **Flaky Intelligence, Cross-Browser Matrix, Performance Intel and Scheduler** re-fetch instead of showing mount-time data. The Reports badge/list updates optimistically at run start and with real totals at completion.
+6. **Failure intelligence input sanitization (`ExecutionEngineService.ts`)**: ANSI color codes embedded in Playwright's JSON error messages are stripped at ingestion — classification heuristics now match ("Application Defect / Suspected application defect") and the UI `<pre>` renders clean text.
+7. **Cascade integrity (`index.ts`, `LocalBridgeServer.ts`)**: deleting a batch or a project now removes linked `test_results`, `failure_analyses`, `healing_proposals`, `discovered_tests`, and `schedules` — no more orphaned rows inflating analytics.
+8. **Report resilience**: `finalizeExecution` preserves the user's batch description/mode/environment/browsers/tag (INSERT … ON CONFLICT no longer stamps placeholder metadata into existing rows and also syncs `json_report_path`); reports opened from Dashboard/Reports surface errors in-page instead of throwing into the void; batch metadata survives disk-hydration recovery.
+9. **Responsiveness everywhere**: sidebar collapses to an icon rail under `md`; tables scroll horizontally with sensible min-widths; explorer stacks panels on small screens; header/KPIs/toolbars/terminal wrap; long paths break safely; all async buttons surface errors instead of silent failures.
+10. **Error-state coverage**: Test Explorer, Failure Intelligence (analyze/generate/validate/apply/rollback/reject), Reports (open/host/delete), Scheduler (load/save/delete), Intelligence pages, Settings — every async path now catches, logs and shows an inline message rather than dying silently.
+
+## Verification (all passing)
+- `npm run typecheck`, `npm run build`
+- Headless main-process E2E harness against a real fixture Playwright project (import → discover → real `playwright test` run → finalize → reports feed → hydration safety-net → analytics → cascades)
+- jsdom UI smoke test of the production bundle: boot, module navigation, `exec:completed-event` auto-refresh of Dashboard/Header/Reports/Failure Intelligence/Cross-Browser/Performance.
 
 ## Root-Cause Fixes in v1.2.0
 1. **Windows SQLite Disk Persistence (`db.ts`)**: Replaced `fs.renameSync(tmpFile, filePath)`—which intermittently fails on Windows with `EPERM` when antivirus or Electron reads the SQLite file—with direct atomic `fs.writeFileSync` so every execution batch, report, and discovered test persists across app restarts.

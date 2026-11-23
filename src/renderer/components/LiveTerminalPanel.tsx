@@ -61,8 +61,8 @@ export const LiveTerminalPanel: React.FC<LiveTerminalPanelProps> = ({
         fullPage ? 'h-full' : expanded ? 'h-80' : 'h-36'
       } transition-all`}
     >
-      <div className="h-9 px-3 bg-pw-slate border-b border-pw-border flex items-center justify-between gap-3 shrink-0">
-        <div className="flex items-center gap-3">
+      <div className="min-h-9 px-2 sm:px-3 py-1 bg-pw-slate border-b border-pw-border flex flex-wrap items-center justify-between gap-x-3 gap-y-1 shrink-0">
+        <div className="flex items-center gap-3 flex-wrap min-w-0">
           <span className="text-xs font-semibold text-slate-200 flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
             PLAYWRIGHT LIVE TERMINAL
@@ -82,14 +82,14 @@ export const LiveTerminalPanel: React.FC<LiveTerminalPanelProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-1.5" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Filter output..."
-              className="bg-pw-navy border border-pw-border rounded pl-7 pr-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500 w-44"
+              className="bg-pw-navy border border-pw-border rounded pl-7 pr-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-sky-500 w-28 sm:w-44"
             />
           </div>
 

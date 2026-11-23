@@ -8,3 +8,5 @@ playwright/.cache/
 *.zip
 *.mp4
 *.webm
+dist/
+release/

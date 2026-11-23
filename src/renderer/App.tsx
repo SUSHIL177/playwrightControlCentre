@@ -18,6 +18,15 @@ import { FailureAndHealingPage } from './pages/FailureAndHealingPage';
 import { ExecutionCenterPage, ReportsAndHistoryPage } from './pages/ExecutionAndReportsPages';
 import { FlakyAndPerformancePage, SchedulerPage, SettingsPage } from './pages/IntelligenceAndSchedulerPages';
 
+async function safeInvoke<T>(label: string, promise: Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await promise;
+  } catch (err: any) {
+    console.error(`[ControlCenter] ${label} failed:`, err);
+    return fallback;
+  }
+}
+
 export default function App() {
   const [route, setRoute] = useState<NavRoute>('dashboard');
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
@@ -29,25 +38,34 @@ export default function App() {
   const [proposals, setProposals] = useState<HealingProposal[]>([]);
   const [logs, setLogs] = useState<TerminalLogChunk[]>([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [executionVersion, setExecutionVersion] = useState(0);
 
   const loadProjects = useCallback(async () => {
-    const list = await window.pwControlCenter.listProjects();
-    setProjects(list);
-    if (list.length > 0 && !activeProject) {
-      setActiveProject(list[0]);
-    } else if (list.length === 0) {
-      setActiveProject(null);
-      setRoute('projects');
+    try {
+      const list: ProjectConfig[] = await window.pwControlCenter.listProjects();
+      setProjects(list);
+      setActiveProject((current) => {
+        if (current && list.some((p: ProjectConfig) => p.id === current.id)) {
+          return current;
+        }
+        if (list.length > 0) return list[0];
+        setRoute('projects');
+        return null;
+      });
+    } catch (err) {
+      console.error('[ControlCenter] Failed to load projects:', err);
     }
-  }, [activeProject]);
+  }, []);
 
   const loadProjectData = useCallback(async (projectId: string) => {
+    // Load each feed independently so one failing module never blocks the rest
+    // (Dashboard, Test Explorer, Reports & History all share this refresh path).
     const [tree, tests, batchList, failureList, proposalList] = await Promise.all([
-      window.pwControlCenter.getTestTree(projectId),
-      window.pwControlCenter.listTests(projectId),
-      window.pwControlCenter.listExecutionBatches(projectId),
-      window.pwControlCenter.listFailures(projectId),
-      window.pwControlCenter.listProposals(projectId),
+      safeInvoke('getTestTree', window.pwControlCenter.getTestTree(projectId), [] as FolderNode[]),
+      safeInvoke('listTests', window.pwControlCenter.listTests(projectId), [] as DiscoveredTest[]),
+      safeInvoke('listExecutionBatches', window.pwControlCenter.listExecutionBatches(projectId), [] as ExecutionBatch[]),
+      safeInvoke('listFailures', window.pwControlCenter.listFailures(projectId), [] as FailureAnalysisRecord[]),
+      safeInvoke('listProposals', window.pwControlCenter.listProposals(projectId), [] as HealingProposal[]),
     ]);
     setTestTree(tree);
     setAllTests(tests);
@@ -77,11 +95,28 @@ export default function App() {
     const unsubLog = window.pwControlCenter.onTerminalLog((chunk) => {
       setLogs((prev) => [...prev.slice(-2000), chunk]);
     });
-    const unsubDone = window.pwControlCenter.onExecutionCompleted(async () => {
+    const unsubDone = window.pwControlCenter.onExecutionCompleted(async (completedBatch: ExecutionBatch | undefined) => {
       setIsRunning(false);
+      // Auto-populate Failure Intelligence after a run so the failure chart and Sidebar badge
+      // are fresh. Stay offline-safe: only auto-analyze with the deterministic local engine;
+      // when an external AI provider is configured we leave analysis to the manual button.
+      if (completedBatch && completedBatch.failed > 0 && activeProject && completedBatch.projectId === activeProject.id) {
+        try {
+          const settings = await window.pwControlCenter.getSettings().catch(() => null);
+          const autoAnalyzeSafe = !settings || settings.ai.provider === 'heuristic_offline' || !settings.ai.analysisEnabled;
+          if (autoAnalyzeSafe) {
+            await window.pwControlCenter.analyzeBatchFailures(completedBatch.id);
+          }
+        } catch (err) {
+          console.error('[ControlCenter] Auto failure analysis failed:', err);
+        }
+      }
       if (activeProject) {
         await loadProjectData(activeProject.id);
       }
+      // Bump a version counter so analytics modules (Flaky / Cross-Browser / Performance /
+      // Scheduler) re-fetch their telemetry instead of showing stale, mount-time data.
+      setExecutionVersion((v) => v + 1);
     });
     return () => {
       unsubLog();
@@ -93,10 +128,15 @@ export default function App() {
     if (!activeProject) return;
     setIsRunning(true);
     try {
-      await window.pwControlCenter.startExecution({
+      const started = await window.pwControlCenter.startExecution({
         projectId: activeProject.id,
         ...opts,
       });
+      // Optimistically show the freshly created (running) batch so Reports & Dashboard
+      // reflect the new run immediately; the completion event re-syncs with real totals.
+      if (started && started.id) {
+        setBatches((prev) => [started, ...prev.filter((b) => b.id !== started.id)]);
+      }
     } catch (err: any) {
       setIsRunning(false);
       setLogs((prev) => [
@@ -122,16 +162,16 @@ export default function App() {
       />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="h-14 px-5 bg-pw-slate/90 border-b border-pw-border flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-400">Active Framework:</span>
+        <header className="min-h-14 px-4 sm:px-5 py-2 bg-pw-slate/90 border-b border-pw-border flex flex-wrap gap-y-2 items-center justify-between shrink-0">
+          <div className="flex items-center gap-3 min-w-0 flex-wrap">
+            <span className="text-xs text-slate-400 hidden sm:inline">Active Framework:</span>
             <select
               value={activeProject?.id || ''}
               onChange={(e) => {
                 const found = projects.find((p) => p.id === e.target.value) || null;
                 setActiveProject(found);
               }}
-              className="bg-pw-navy border border-pw-border rounded-lg px-3 py-1.5 text-xs font-semibold text-white min-w-[240px]"
+              className="bg-pw-navy border border-pw-border rounded-lg px-3 py-1.5 text-xs font-semibold text-white min-w-0 w-44 sm:w-auto sm:min-w-[240px] max-w-[60vw] truncate"
             >
               {projects.length === 0 && <option value="">No project imported</option>}
               {projects.map((p) => (
@@ -142,11 +182,11 @@ export default function App() {
             </select>
           </div>
 
-          <div className="flex items-center gap-3 text-xs">
-            <span className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 font-mono">
+          <div className="flex items-center gap-2 sm:gap-3 text-xs flex-wrap">
+            <span className="px-2.5 py-1 rounded bg-slate-800 text-slate-300 font-mono whitespace-nowrap">
               Tests: {allTests.length}
             </span>
-            <span className="px-2.5 py-1 rounded bg-slate-800 text-sky-300 font-mono">
+            <span className="px-2.5 py-1 rounded bg-slate-800 text-sky-300 font-mono whitespace-nowrap">
               Reports: {batches.length}
             </span>
             <span
@@ -233,10 +273,10 @@ export default function App() {
           )}
 
           {(route === 'flaky' || route === 'cross-browser' || route === 'performance') && (
-            <FlakyAndPerformancePage mode={route} project={activeProject} />
+            <FlakyAndPerformancePage mode={route} project={activeProject} refreshKey={executionVersion} />
           )}
 
-          {route === 'scheduler' && <SchedulerPage project={activeProject} />}
+          {route === 'scheduler' && <SchedulerPage project={activeProject} refreshKey={executionVersion} />}
 
           {(route === 'reports' || route === 'history') && (
             <ReportsAndHistoryPage

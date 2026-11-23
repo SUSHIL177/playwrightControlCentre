@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronRight,
   ChevronDown,
@@ -36,6 +36,7 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
   onRefreshData,
   onExecute,
 }) => {
+  const autoScanAttempted = useRef<Set<string>>(new Set());
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [selectedTestIds, setSelectedTestIds] = useState<Set<string>>(new Set());
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
@@ -46,16 +47,26 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
   const [headed, setHeaded] = useState(false);
   const [workers, setWorkers] = useState<number>(4);
   const [scanning, setScanning] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Automatically trigger discovery if a project is open but has 0 tests cached
+  // Automatically trigger discovery once per project if it has 0 cached tests.
   useEffect(() => {
-    if (project && allTests.length === 0 && !scanning) {
-      setScanning(true);
-      window.pwControlCenter
-        .rescanProject(project.id)
-        .then(() => onRefreshData())
-        .finally(() => setScanning(false));
-    }
+    if (!project) return;
+    if (allTests.length > 0) return;
+    if (autoScanAttempted.current.has(project.id)) return;
+    autoScanAttempted.current.add(project.id);
+
+    setScanning(true);
+    setActionError(null);
+    window.pwControlCenter
+      .rescanProject(project.id)
+      .then(() => onRefreshData())
+      .catch((err) => {
+        console.error('[ControlCenter] Auto rescan failed:', err);
+        setActionError(err?.message || 'Automatic test discovery failed. Click the refresh icon to retry.');
+      })
+      .finally(() => setScanning(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
 
   const effectiveTree = useMemo<FolderNode[]>(() => {
@@ -163,9 +174,13 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
 
   const handleRescan = async () => {
     setScanning(true);
+    setActionError(null);
     try {
       await window.pwControlCenter.rescanProject(project.id);
       await onRefreshData();
+    } catch (err: any) {
+      console.error('[ControlCenter] Rescan failed:', err);
+      setActionError(err?.message || 'Failed to re-scan the project.');
     } finally {
       setScanning(false);
     }
@@ -232,8 +247,8 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
   };
 
   return (
-    <div className="flex h-full overflow-hidden">
-      <div className="w-80 border-r border-pw-border bg-pw-slate/60 flex flex-col">
+    <div className="flex flex-col lg:flex-row h-full overflow-hidden">
+      <div className="w-full lg:w-80 max-h-64 lg:max-h-none border-b lg:border-b-0 lg:border-r border-pw-border bg-pw-slate/60 flex flex-col shrink-0">
         <div className="p-3 border-b border-pw-border flex items-center justify-between">
           <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
             Test Suite Hierarchy
@@ -273,7 +288,12 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {actionError && (
+          <div className="px-3 py-2 text-[11px] bg-rose-500/15 border-b border-rose-500/40 text-rose-300">
+            {actionError}
+          </div>
+        )}
         <div className="p-3 border-b border-pw-border bg-pw-panel/60 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -389,8 +409,8 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
-          <table className="w-full text-left border-collapse text-xs">
+        <div className="flex-1 overflow-auto">
+          <table className="w-full min-w-[760px] text-left border-collapse text-xs">
             <thead className="bg-pw-slate sticky top-0 text-slate-400 border-b border-pw-border">
               <tr>
                 <th className="p-2.5 w-8"></th>
@@ -402,6 +422,15 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-pw-border/50">
+              {displayedTests.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center text-slate-500">
+                    {allTests.length === 0
+                      ? 'No tests discovered yet. Click the refresh icon in the tree panel to scan your Playwright specs.'
+                      : 'No tests match the current filters.'}
+                  </td>
+                </tr>
+              )}
               {displayedTests.map((t) => {
                 const checked = selectedTestIds.has(t.id);
                 return (
