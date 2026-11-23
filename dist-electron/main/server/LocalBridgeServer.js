@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.LocalBridgeServer = void 0;
 const http_1 = __importDefault(require("http"));
 const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
 const electron_1 = require("electron");
 const db_1 = require("../database/db");
 class LocalBridgeServer {
@@ -15,16 +16,18 @@ class LocalBridgeServer {
     analyticsService;
     schedulerReportService;
     settingsService;
+    artifactService;
     getMainWindow;
     server = null;
     sseClients = new Set();
-    constructor(discoveryService, executionService, failureService, analyticsService, schedulerReportService, settingsService, getMainWindow) {
+    constructor(discoveryService, executionService, failureService, analyticsService, schedulerReportService, settingsService, artifactService, getMainWindow) {
         this.discoveryService = discoveryService;
         this.executionService = executionService;
         this.failureService = failureService;
         this.analyticsService = analyticsService;
         this.schedulerReportService = schedulerReportService;
         this.settingsService = settingsService;
+        this.artifactService = artifactService;
         this.getMainWindow = getMainWindow;
     }
     broadcast(event, data) {
@@ -170,6 +173,24 @@ class LocalBridgeServer {
                 return true;
             case 'startReportHosting':
                 return this.schedulerReportService.hostReportDirectory(path_1.default.dirname(args[0]));
+            case 'revealReportInFolder': {
+                const target = args[0];
+                if (target && fs_1.default.existsSync(target)) {
+                    electron_1.shell.showItemInFolder(target);
+                }
+                else if (target) {
+                    electron_1.shell.openPath(path_1.default.dirname(target));
+                }
+                return true;
+            }
+            case 'listArtifacts':
+                return this.artifactService.listArtifacts(args[0]);
+            case 'previewArtifact':
+                return this.artifactService.previewArtifact(args[0], args[1]);
+            case 'openArtifact':
+                return this.artifactService.openArtifact(args[0], args[1]);
+            case 'revealArtifact':
+                return this.artifactService.revealArtifact(args[0], args[1]);
             case 'analyzeBatchFailures':
                 return this.failureService.analyzeExecutionFailures(args[0]);
             case 'listFailures':

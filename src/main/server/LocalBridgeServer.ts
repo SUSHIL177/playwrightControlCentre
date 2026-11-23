@@ -1,6 +1,7 @@
 import http from 'http';
 import path from 'path';
-import { BrowserWindow, dialog } from 'electron';
+import fs from 'fs';
+import { BrowserWindow, dialog, shell } from 'electron';
 import { getDb } from '../database/db';
 import { ProjectDiscoveryService } from '../services/ProjectDiscoveryService';
 import { ExecutionEngineService } from '../services/ExecutionEngineService';
@@ -8,6 +9,7 @@ import { FailureIntelligenceService } from '../services/FailureIntelligenceServi
 import { AnalyticsIntelligenceService } from '../services/AnalyticsIntelligenceService';
 import { SchedulerAndReportService } from '../services/SchedulerAndReportService';
 import { SettingsService } from '../services/SettingsService';
+import { ArtifactCatalogService } from '../services/ArtifactCatalogService';
 
 export class LocalBridgeServer {
   private server: http.Server | null = null;
@@ -20,6 +22,7 @@ export class LocalBridgeServer {
     private analyticsService: AnalyticsIntelligenceService,
     private schedulerReportService: SchedulerAndReportService,
     private settingsService: SettingsService,
+    private artifactService: ArtifactCatalogService,
     private getMainWindow: () => BrowserWindow | null
   ) {}
 
@@ -176,6 +179,23 @@ export class LocalBridgeServer {
         return true;
       case 'startReportHosting':
         return this.schedulerReportService.hostReportDirectory(path.dirname(args[0]));
+      case 'revealReportInFolder': {
+        const target = args[0];
+        if (target && fs.existsSync(target)) {
+          shell.showItemInFolder(target);
+        } else if (target) {
+          shell.openPath(path.dirname(target));
+        }
+        return true;
+      }
+      case 'listArtifacts':
+        return this.artifactService.listArtifacts(args[0]);
+      case 'previewArtifact':
+        return this.artifactService.previewArtifact(args[0], args[1]);
+      case 'openArtifact':
+        return this.artifactService.openArtifact(args[0], args[1]);
+      case 'revealArtifact':
+        return this.artifactService.revealArtifact(args[0], args[1]);
       case 'analyzeBatchFailures':
         return this.failureService.analyzeExecutionFailures(args[0]);
       case 'listFailures':

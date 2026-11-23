@@ -2,6 +2,7 @@ export type NavRoute =
   | 'dashboard'
   | 'projects'
   | 'explorer'
+  | 'artifacts'
   | 'execution'
   | 'terminal'
   | 'failures'
@@ -256,4 +257,29 @@ export interface TerminalLogChunk {
   stream: 'stdout' | 'stderr' | 'system';
   text: string;
   timestamp: string;
+}
+
+export type ArtifactKind = 'text' | 'image' | 'video' | 'archive' | 'pdf' | 'other';
+
+export interface ArtifactFile {
+  name: string;
+  /** Forward-slash path relative to the project root. */
+  relativePath: string;
+  /** Forward-slash directory portion of relativePath ('.' for root files). */
+  folderPath: string;
+  extension: string;
+  sizeBytes: number;
+  modifiedAt: string;
+  absolutePath: string;
+  kind: ArtifactKind;
+}
+
+export interface ArtifactPreview {
+  relativePath: string;
+  contentType: 'text' | 'image';
+  /** Present for contentType === 'text'. */
+  text?: string;
+  /** Present for contentType === 'image' — base64 data URL. */
+  dataUrl?: string;
+  truncated: boolean;
 }

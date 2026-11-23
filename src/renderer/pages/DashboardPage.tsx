@@ -14,8 +14,9 @@ import {
   Line,
   Legend,
 } from 'recharts';
-import { Play, AlertTriangle, CheckCircle2, Clock, Activity, ExternalLink, RefreshCw } from 'lucide-react';
+import { Play, AlertTriangle, CheckCircle2, Clock, Activity, ExternalLink, RefreshCw, Loader2 } from 'lucide-react';
 import { DiscoveredTest, ExecutionBatch, FailureAnalysisRecord, ProjectConfig } from '@shared/types';
+import { batchAxisLabel, batchShortLabel } from '../utils/batchFormat';
 interface DashboardPageProps {
   project: ProjectConfig | null;
   tests: DiscoveredTest[];
@@ -34,6 +35,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   onRefresh,
 }) => {
   const [reportError, setReportError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
+
+  const handleRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshError(null);
+    try {
+      await onRefresh();
+      setRefreshedAt(new Date());
+    } catch (err: any) {
+      setRefreshError(err?.message || 'Failed to refresh telemetry.');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (!project) {
     return (
@@ -66,7 +84,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     .slice(0, 12)
     .reverse()
     .map((b) => ({
-      name: b.id.slice(-6),
+      name: batchAxisLabel(b),
       passPct: b.totalTests > 0 ? Math.round((b.passed / b.totalTests) * 100) : 0,
       passed: b.passed,
       failed: b.failed,
@@ -74,24 +92,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       durationSec: Number((b.durationMs / 1000).toFixed(1)),
     }));
 
-  const folderCounts = tests.reduce<Record<string, { folder: string; passed: number; failed: number; total: number }>>(
-    (acc, t) => {
-      const f = t.folderPath.split('/').pop() || t.folderPath;
-      if (!acc[f]) acc[f] = { folder: f, passed: 0, failed: 0, total: 0 };
-      acc[f].total += 1;
-      if (t.lastStatus === 'passed') acc[f].passed += 1;
-      if (t.lastStatus === 'failed' || t.lastStatus === 'timedOut') acc[f].failed += 1;
-      return acc;
-    },
-    {}
-  );
-  const folderChartData = Object.values(folderCounts);
-
   const categoryCounts = failures.reduce<Record<string, number>>((acc, f) => {
     acc[f.category] = (acc[f.category] || 0) + 1;
     return acc;
   }, {});
-  const failureCategoryData = Object.entries(categoryCounts).map(([name, value]) => ({ name, value }));
+  const failureCategoryData = Object.entries(categoryCounts)
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value);
 
   return (
     <div className="p-6 space-y-6">
@@ -104,12 +111,21 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={onRefresh}
+            onClick={handleRefresh}
+            disabled={refreshing}
             title="Refresh Dashboard Telemetry"
-            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200"
+            aria-label="Refresh Dashboard Telemetry"
+            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-60 disabled:cursor-wait text-slate-200"
           >
-            <RefreshCw className="w-4 h-4" />
+            {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           </button>
+          {refreshing ? (
+            <span className="text-[10px] text-sky-300">Refreshing…</span>
+          ) : refreshedAt ? (
+            <span className="text-[10px] text-slate-500 hidden md:inline">
+              Telemetry refreshed at {refreshedAt.toLocaleTimeString(undefined, { hour12: false })}
+            </span>
+          ) : null}
           {latest && (
             <button
               onClick={async () => {
@@ -140,6 +156,12 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         </div>
       )}
 
+      {refreshError && (
+        <div className="px-4 py-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs">
+          Unable to refresh telemetry: {refreshError}
+        </div>
+      )}
+
       {/* KPI Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
         <KpiCard label="Discovered Tests" value={tests.length} icon={<CheckCircle2 className="w-4 h-4 text-sky-400" />} />
@@ -161,7 +183,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           {/* Chart 1: Latest Batch Donut */}
           <div className="bg-pw-panel border border-pw-border rounded-xl p-4">
             <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">
-              Latest Batch Breakdown ({latest?.id}) — {latest?.passed} Passed / {latest?.failed} Failed
+              Latest Batch Breakdown ({batchShortLabel(latest)}) — {latest?.passed} Passed / {latest?.failed} Failed
             </h3>
             <div className="h-60">
               {donutData.length === 0 ? (
@@ -222,33 +244,32 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             </div>
           </div>
 
-          {/* Chart 4: Folder-wise Coverage & Failure Distribution */}
+          {/* Chart 4: Failure Category Distribution (always shown; fed by analyzed failures) */}
           <div className="bg-pw-panel border border-pw-border rounded-xl p-4">
             <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">
-              {failureCategoryData.length > 0 ? 'AI Failure Category Distribution' : 'Folder-Wise Test Status'}
+              AI Failure Category Distribution
             </h3>
             <div className="h-60">
-              {failureCategoryData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={failureCategoryData} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" />
-                    <XAxis type="number" stroke="#64748B" fontSize={11} />
-                    <YAxis type="category" dataKey="name" width={135} stroke="#94A3B8" fontSize={10} />
-                    <Tooltip contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px' }} />
-                    <Bar dataKey="value" fill="#F43F5E" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+              {failureCategoryData.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center gap-2 px-6">
+                  <AlertTriangle className="w-8 h-8 text-slate-600" />
+                  <p className="text-xs text-slate-400">
+                    No analyzed failures yet.
+                  </p>
+                  <p className="text-[11px] text-slate-500 max-w-sm">
+                    Failures are auto-analyzed after each run when the offline engine is active. Open{' '}
+                    <strong className="text-slate-300">Failure Intelligence</strong> and click{' '}
+                    <strong className="text-slate-300">Analyze</strong> on a batch to classify them — the distribution will appear here.
+                  </p>
+                </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={folderChartData}>
+                  <BarChart data={failureCategoryData} layout="vertical" margin={{ left: 12 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" />
-                    <XAxis dataKey="folder" stroke="#64748B" fontSize={11} />
-                    <YAxis stroke="#64748B" fontSize={11} />
+                    <XAxis type="number" allowDecimals={false} stroke="#64748B" fontSize={11} />
+                    <YAxis type="category" dataKey="name" width={150} stroke="#94A3B8" fontSize={10} />
                     <Tooltip contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px' }} />
-                    <Legend wrapperStyle={{ fontSize: '12px' }} />
-                    <Bar dataKey="passed" name="Passed" fill="#10B981" />
-                    <Bar dataKey="failed" name="Failed" fill="#F43F5E" />
-                    <Bar dataKey="total" name="Discovered" fill="#38BDF8" />
+                    <Bar dataKey="value" name="Failures" fill="#F43F5E" radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}

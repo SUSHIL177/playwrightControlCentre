@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import chokidar, { FSWatcher } from 'chokidar';
@@ -10,6 +10,7 @@ import { FailureIntelligenceService } from './services/FailureIntelligenceServic
 import { AnalyticsIntelligenceService } from './services/AnalyticsIntelligenceService';
 import { SchedulerAndReportService } from './services/SchedulerAndReportService';
 import { SettingsService } from './services/SettingsService';
+import { ArtifactCatalogService } from './services/ArtifactCatalogService';
 import { LocalBridgeServer } from './server/LocalBridgeServer';
 
 let mainWindow: BrowserWindow | null = null;
@@ -21,6 +22,7 @@ const executionService = new ExecutionEngineService();
 const failureService = new FailureIntelligenceService(settingsService);
 const analyticsService = new AnalyticsIntelligenceService();
 const schedulerReportService = new SchedulerAndReportService(executionService);
+const artifactService = new ArtifactCatalogService();
 const bridgeServer = new LocalBridgeServer(
   discoveryService,
   executionService,
@@ -28,6 +30,7 @@ const bridgeServer = new LocalBridgeServer(
   analyticsService,
   schedulerReportService,
   settingsService,
+  artifactService,
   () => mainWindow
 );
 
@@ -200,6 +203,32 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC.REPORT_START_HOSTING, (_, htmlReportPath: string) => {
     return schedulerReportService.hostReportDirectory(path.dirname(htmlReportPath));
+  });
+
+  ipcMain.handle(IPC.REPORT_REVEAL_IN_FOLDER, (_, htmlReportPath: string) => {
+    if (!htmlReportPath) throw new Error('No report path provided.');
+    if (fs.existsSync(htmlReportPath)) {
+      shell.showItemInFolder(htmlReportPath);
+    } else {
+      shell.openPath(path.dirname(htmlReportPath));
+    }
+    return true;
+  });
+
+  ipcMain.handle(IPC.ARTIFACTS_LIST, (_, projectId: string) => {
+    return artifactService.listArtifacts(projectId);
+  });
+
+  ipcMain.handle(IPC.ARTIFACTS_PREVIEW, (_, projectId: string, relativePath: string) => {
+    return artifactService.previewArtifact(projectId, relativePath);
+  });
+
+  ipcMain.handle(IPC.ARTIFACTS_OPEN, (_, projectId: string, relativePath: string) => {
+    return artifactService.openArtifact(projectId, relativePath);
+  });
+
+  ipcMain.handle(IPC.ARTIFACTS_REVEAL, (_, projectId: string, relativePath: string) => {
+    return artifactService.revealArtifact(projectId, relativePath);
   });
 
   ipcMain.handle(IPC.FAILURE_ANALYZE_BATCH, (_, executionId: string) => {
