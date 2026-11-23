@@ -21,7 +21,7 @@ export const ExecutionCenterPage: React.FC<{
 
   return (
     <div className="p-6 space-y-6 max-w-5xl">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-white">Test Execution Center</h1>
           <p className="text-xs text-slate-400 mt-0.5">
@@ -174,7 +174,7 @@ export const ReportsAndHistoryPage: React.FC<{
 
   return (
     <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-white">Native Playwright HTML Reports & Execution History</h1>
           <p className="text-xs text-slate-400 mt-0.5">
@@ -194,8 +194,8 @@ export const ReportsAndHistoryPage: React.FC<{
         </div>
       )}
 
-      <div className="bg-pw-panel border border-pw-border rounded-xl overflow-hidden">
-        <table className="w-full text-left border-collapse text-xs">
+      <div className="bg-pw-panel border border-pw-border rounded-xl overflow-hidden overflow-x-auto">
+        <table className="w-full min-w-[900px] text-left border-collapse text-xs">
           <thead className="bg-pw-slate text-slate-400 border-b border-pw-border">
             <tr>
               <th className="p-3">Execution ID</th>
@@ -243,8 +243,13 @@ export const ReportsAndHistoryPage: React.FC<{
                     </button>
                     <button
                       onClick={async () => {
-                        const url = await window.pwControlCenter.startReportHosting(b.htmlReportPath);
-                        setHostedUrl(url);
+                        setReportError(null);
+                        try {
+                          const url = await window.pwControlCenter.startReportHosting(b.htmlReportPath);
+                          setHostedUrl(url);
+                        } catch (e: any) {
+                          setReportError(e?.message || 'Unable to host the HTML report.');
+                        }
                       }}
                       title="Host report over LAN"
                       className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200"
@@ -261,9 +266,15 @@ export const ReportsAndHistoryPage: React.FC<{
                     )}
                     <button
                       onClick={async () => {
-                        await window.pwControlCenter.deleteBatch(b.id);
-                        await onRefresh();
+                        setReportError(null);
+                        try {
+                          await window.pwControlCenter.deleteBatch(b.id);
+                          await onRefresh();
+                        } catch (e: any) {
+                          setReportError(e?.message || 'Unable to delete the execution batch.');
+                        }
                       }}
+                      title="Delete batch and its results"
                       className="p-1 text-slate-400 hover:text-rose-400"
                     >
                       <Trash2 className="w-3.5 h-3.5" />

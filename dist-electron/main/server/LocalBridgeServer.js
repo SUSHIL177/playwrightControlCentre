@@ -93,9 +93,20 @@ class LocalBridgeServer {
                 return this.discoveryService.importProject(args[0]);
             case 'listProjects':
                 return this.discoveryService.listProjects();
-            case 'deleteProject':
-                (0, db_1.getDb)().prepare('DELETE FROM projects WHERE id = ?').run(args[0]);
+            case 'deleteProject': {
+                const db = (0, db_1.getDb)();
+                const deleteCascade = db.transaction((id) => {
+                    db.prepare('DELETE FROM healing_proposals WHERE project_id = ?').run(id);
+                    db.prepare('DELETE FROM failure_analyses WHERE project_id = ?').run(id);
+                    db.prepare('DELETE FROM test_results WHERE project_id = ?').run(id);
+                    db.prepare('DELETE FROM execution_batches WHERE project_id = ?').run(id);
+                    db.prepare('DELETE FROM discovered_tests WHERE project_id = ?').run(id);
+                    db.prepare('DELETE FROM schedules WHERE project_id = ?').run(id);
+                    db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+                });
+                deleteCascade(args[0]);
                 return true;
+            }
             case 'rescanProject': {
                 const project = this.discoveryService.listProjects().find((p) => p.id === args[0]);
                 if (!project)
@@ -143,9 +154,17 @@ class LocalBridgeServer {
             }
             case 'compareBatches':
                 return this.analyticsService.compareBatches(args[0], args[1]);
-            case 'deleteBatch':
-                (0, db_1.getDb)().prepare('DELETE FROM execution_batches WHERE id = ?').run(args[0]);
+            case 'deleteBatch': {
+                const db = (0, db_1.getDb)();
+                const deleteCascade = db.transaction((id) => {
+                    db.prepare(`DELETE FROM healing_proposals WHERE failure_id IN (SELECT id FROM failure_analyses WHERE execution_id = ?)`).run(id);
+                    db.prepare('DELETE FROM failure_analyses WHERE execution_id = ?').run(id);
+                    db.prepare('DELETE FROM test_results WHERE execution_id = ?').run(id);
+                    db.prepare('DELETE FROM execution_batches WHERE id = ?').run(id);
+                });
+                deleteCascade(args[0]);
                 return true;
+            }
             case 'openReportInBrowser':
                 this.schedulerReportService.openNativeReportInBrowser(args[0]);
                 return true;

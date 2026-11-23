@@ -390,7 +390,7 @@ class ProjectDiscoveryService {
             const node = {
                 name,
                 relativePath: relFolderPath,
-                fullPath: path_1.default.join(project.rootPath, relFolderPath),
+                fullPath: path_1.default.join(project.root_path, relFolderPath),
                 testCount: 0,
                 children: [],
                 specs: [],

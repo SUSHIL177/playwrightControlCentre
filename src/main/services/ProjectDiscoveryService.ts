@@ -479,7 +479,7 @@ export class ProjectDiscoveryService {
       const node: FolderNode = {
         name,
         relativePath: relFolderPath,
-        fullPath: path.join(project.rootPath, relFolderPath),
+        fullPath: path.join(project.root_path, relFolderPath),
         testCount: 0,
         children: [],
         specs: [],

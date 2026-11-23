@@ -66,7 +66,17 @@ function registerIpcHandlers() {
         return discoveryService.listProjects();
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.PROJECT_DELETE, (_, projectId) => {
-        (0, db_1.getDb)().prepare('DELETE FROM projects WHERE id = ?').run(projectId);
+        const db = (0, db_1.getDb)();
+        const deleteCascade = db.transaction((id) => {
+            db.prepare('DELETE FROM healing_proposals WHERE project_id = ?').run(id);
+            db.prepare('DELETE FROM failure_analyses WHERE project_id = ?').run(id);
+            db.prepare('DELETE FROM test_results WHERE project_id = ?').run(id);
+            db.prepare('DELETE FROM execution_batches WHERE project_id = ?').run(id);
+            db.prepare('DELETE FROM discovered_tests WHERE project_id = ?').run(id);
+            db.prepare('DELETE FROM schedules WHERE project_id = ?').run(id);
+            db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+        });
+        deleteCascade(projectId);
         return true;
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.PROJECT_RESCAN, async (_, projectId) => {
@@ -149,7 +159,14 @@ function registerIpcHandlers() {
         return analyticsService.compareBatches(batchA, batchB);
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.HISTORY_DELETE_BATCH, (_, executionId) => {
-        (0, db_1.getDb)().prepare('DELETE FROM execution_batches WHERE id = ?').run(executionId);
+        const db = (0, db_1.getDb)();
+        const deleteCascade = db.transaction((id) => {
+            db.prepare(`DELETE FROM healing_proposals WHERE failure_id IN (SELECT id FROM failure_analyses WHERE execution_id = ?)`).run(id);
+            db.prepare('DELETE FROM failure_analyses WHERE execution_id = ?').run(id);
+            db.prepare('DELETE FROM test_results WHERE execution_id = ?').run(id);
+            db.prepare('DELETE FROM execution_batches WHERE id = ?').run(id);
+        });
+        deleteCascade(executionId);
         return true;
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.REPORT_OPEN_BROWSER, (_, htmlReportPath) => {

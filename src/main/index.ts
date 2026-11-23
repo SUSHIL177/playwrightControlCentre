@@ -77,7 +77,17 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle(IPC.PROJECT_DELETE, (_, projectId: string) => {
-    getDb().prepare('DELETE FROM projects WHERE id = ?').run(projectId);
+    const db = getDb();
+    const deleteCascade = db.transaction((id: string) => {
+      db.prepare('DELETE FROM healing_proposals WHERE project_id = ?').run(id);
+      db.prepare('DELETE FROM failure_analyses WHERE project_id = ?').run(id);
+      db.prepare('DELETE FROM test_results WHERE project_id = ?').run(id);
+      db.prepare('DELETE FROM execution_batches WHERE project_id = ?').run(id);
+      db.prepare('DELETE FROM discovered_tests WHERE project_id = ?').run(id);
+      db.prepare('DELETE FROM schedules WHERE project_id = ?').run(id);
+      db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    });
+    deleteCascade(projectId);
     return true;
   });
 
@@ -170,7 +180,16 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle(IPC.HISTORY_DELETE_BATCH, (_, executionId: string) => {
-    getDb().prepare('DELETE FROM execution_batches WHERE id = ?').run(executionId);
+    const db = getDb();
+    const deleteCascade = db.transaction((id: string) => {
+      db.prepare(
+        `DELETE FROM healing_proposals WHERE failure_id IN (SELECT id FROM failure_analyses WHERE execution_id = ?)`
+      ).run(id);
+      db.prepare('DELETE FROM failure_analyses WHERE execution_id = ?').run(id);
+      db.prepare('DELETE FROM test_results WHERE execution_id = ?').run(id);
+      db.prepare('DELETE FROM execution_batches WHERE id = ?').run(id);
+    });
+    deleteCascade(executionId);
     return true;
   });
 

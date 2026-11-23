@@ -5,23 +5,44 @@ import { AppSettings, FlakyTestMetric, ProjectConfig, ScheduleConfig } from '@sh
 export const FlakyAndPerformancePage: React.FC<{
   mode: 'flaky' | 'cross-browser' | 'performance';
   project: ProjectConfig | null;
-}> = ({ mode, project }) => {
+  /** Bumped by the app whenever an execution batch completes — forces telemetry refetch. */
+  refreshKey?: number;
+}> = ({ mode, project, refreshKey = 0 }) => {
   const [flakyList, setFlakyList] = useState<FlakyTestMetric[]>([]);
   const [matrix, setMatrix] = useState<any[]>([]);
   const [perf, setPerf] = useState<{ slowTests: any[]; folderDurations: any[] }>({ slowTests: [], folderDurations: [] });
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!project) return;
-    if (mode === 'flaky') {
-      window.pwControlCenter.getFlakyTests(project.id).then(setFlakyList);
-    } else if (mode === 'cross-browser') {
-      window.pwControlCenter.getCrossBrowserMatrix(project.id).then(setMatrix);
-    } else {
-      window.pwControlCenter.getPerformanceBottlenecks(project.id).then(setPerf);
-    }
-  }, [mode, project]);
+    setLoading(true);
+    setLoadError(null);
+    const request: Promise<any> =
+      mode === 'flaky'
+        ? window.pwControlCenter.getFlakyTests(project.id)
+        : mode === 'cross-browser'
+        ? window.pwControlCenter.getCrossBrowserMatrix(project.id)
+        : window.pwControlCenter.getPerformanceBottlenecks(project.id);
+
+    request
+      .then((data) => {
+        if (mode === 'flaky') setFlakyList(Array.isArray(data) ? data : []);
+        else if (mode === 'cross-browser') setMatrix(Array.isArray(data) ? data : []);
+        else setPerf(data && Array.isArray(data.slowTests) ? data : { slowTests: [], folderDurations: [] });
+      })
+      .catch((err) => {
+        console.error('[ControlCenter] Failed to load intelligence telemetry:', err);
+        setLoadError(err?.message || 'Failed to load telemetry for this project.');
+      })
+      .finally(() => setLoading(false));
+  }, [mode, project, refreshKey]);
 
   if (!project) return <div className="p-8 text-slate-400">Import a project first.</div>;
+
+  const errorBanner = loadError ? (
+    <div className="p-3 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs">{loadError}</div>
+  ) : null;
 
   if (mode === 'flaky') {
     return (
@@ -30,8 +51,9 @@ export const FlakyAndPerformancePage: React.FC<{
         <p className="text-xs text-slate-400">
           Identifies tests exhibiting inconsistent pass/fail or retry behavior across minimum configured runs.
         </p>
-        <div className="bg-pw-panel border border-pw-border rounded-xl overflow-hidden">
-          <table className="w-full text-left text-xs">
+        {errorBanner}
+        <div className="bg-pw-panel border border-pw-border rounded-xl overflow-hidden overflow-x-auto">
+          <table className="w-full min-w-[720px] text-left text-xs">
             <thead className="bg-pw-slate text-slate-400 border-b border-pw-border">
               <tr>
                 <th className="p-3">Test Name</th>
@@ -46,7 +68,7 @@ export const FlakyAndPerformancePage: React.FC<{
               {flakyList.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="p-6 text-center text-slate-500">
-                    No flaky tests detected above threshold yet. Run multiple regression batches to build stability telemetry.
+                    {loading ? 'Loading flaky test telemetry…' : 'No flaky tests detected above threshold yet. Run multiple regression batches to build stability telemetry.'}
                   </td>
                 </tr>
               ) : (
@@ -75,8 +97,9 @@ export const FlakyAndPerformancePage: React.FC<{
     return (
       <div className="p-6 space-y-4">
         <h1 className="text-xl font-bold text-white">Cross-Browser Execution Matrix</h1>
-        <div className="bg-pw-panel border border-pw-border rounded-xl overflow-hidden">
-          <table className="w-full text-left text-xs">
+        {errorBanner}
+        <div className="bg-pw-panel border border-pw-border rounded-xl overflow-hidden overflow-x-auto">
+          <table className="w-full min-w-[640px] text-left text-xs">
             <thead className="bg-pw-slate text-slate-400 border-b border-pw-border">
               <tr>
                 <th className="p-3">Test Case</th>
@@ -86,14 +109,22 @@ export const FlakyAndPerformancePage: React.FC<{
               </tr>
             </thead>
             <tbody className="divide-y divide-pw-border/50">
-              {matrix.map((row) => (
-                <tr key={row.testId}>
-                  <td className="p-3 text-white font-medium">{row.testTitle}</td>
-                  <td className="p-3 uppercase text-[11px]">{row.chromium?.status || '—'}</td>
-                  <td className="p-3 uppercase text-[11px]">{row.firefox?.status || '—'}</td>
-                  <td className="p-3 uppercase text-[11px]">{row.webkit?.status || '—'}</td>
+              {matrix.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="p-6 text-center text-slate-500">
+                    {loading ? 'Loading cross-browser telemetry…' : 'No cross-browser runs recorded yet. Execute a batch to populate the matrix.'}
+                  </td>
                 </tr>
-              ))}
+              ) : (
+                matrix.map((row) => (
+                  <tr key={row.testId}>
+                    <td className="p-3 text-white font-medium">{row.testTitle}</td>
+                    <td className="p-3 uppercase text-[11px]">{row.chromium?.status || '—'}</td>
+                    <td className="p-3 uppercase text-[11px]">{row.firefox?.status || '—'}</td>
+                    <td className="p-3 uppercase text-[11px]">{row.webkit?.status || '—'}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -104,8 +135,9 @@ export const FlakyAndPerformancePage: React.FC<{
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-xl font-bold text-white">Test Performance Intelligence & Bottlenecks</h1>
-      <div className="bg-pw-panel border border-pw-border rounded-xl overflow-hidden">
-        <table className="w-full text-left text-xs">
+      {errorBanner}
+      <div className="bg-pw-panel border border-pw-border rounded-xl overflow-hidden overflow-x-auto">
+        <table className="w-full min-w-[720px] text-left text-xs">
           <thead className="bg-pw-slate text-slate-400 border-b border-pw-border">
             <tr>
               <th className="p-3">Slowest Test Case</th>
@@ -116,15 +148,23 @@ export const FlakyAndPerformancePage: React.FC<{
             </tr>
           </thead>
           <tbody className="divide-y divide-pw-border/50">
-            {perf.slowTests.map((t, idx) => (
-              <tr key={idx}>
-                <td className="p-3 text-white font-medium">{t.testTitle}</td>
-                <td className="p-3 text-slate-300">{t.browser}</td>
-                <td className="p-3 text-amber-300 font-mono">{(t.avgDurationMs / 1000).toFixed(2)}s</td>
-                <td className="p-3 text-rose-300 font-mono">{(t.maxDurationMs / 1000).toFixed(2)}s</td>
-                <td className="p-3">{t.totalRetries}</td>
+            {perf.slowTests.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="p-6 text-center text-slate-500">
+                  {loading ? 'Loading performance telemetry…' : 'No execution timings recorded yet. Execute a batch to identify bottlenecks.'}
+                </td>
               </tr>
-            ))}
+            ) : (
+              perf.slowTests.map((t, idx) => (
+                <tr key={idx}>
+                  <td className="p-3 text-white font-medium">{t.testTitle}</td>
+                  <td className="p-3 text-slate-300">{t.browser}</td>
+                  <td className="p-3 text-amber-300 font-mono">{(t.avgDurationMs / 1000).toFixed(2)}s</td>
+                  <td className="p-3 text-rose-300 font-mono">{(t.maxDurationMs / 1000).toFixed(2)}s</td>
+                  <td className="p-3">{t.totalRetries}</td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
@@ -132,24 +172,39 @@ export const FlakyAndPerformancePage: React.FC<{
   );
 };
 
-export const SchedulerPage: React.FC<{ project: ProjectConfig | null }> = ({ project }) => {
+export const SchedulerPage: React.FC<{ project: ProjectConfig | null; refreshKey?: number }> = ({ project, refreshKey = 0 }) => {
   const [schedules, setSchedules] = useState<ScheduleConfig[]>([]);
   const [name, setName] = useState('Nightly Full Regression');
   const [cronExpr, setCronExpr] = useState('0 2 * * *');
   const [environment, setEnvironment] = useState('staging');
   const [webhookUrl, setWebhookUrl] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
-  const load = () => window.pwControlCenter.listSchedules().then(setSchedules);
+  const load = () =>
+    window.pwControlCenter
+      .listSchedules()
+      .then((list) => {
+        setSchedules(Array.isArray(list) ? list : []);
+        setError(null);
+      })
+      .catch((err) => {
+        console.error('[ControlCenter] Failed to load schedules:', err);
+        setError(err?.message || 'Failed to load schedules.');
+      });
+
   useEffect(() => {
     load();
-  }, []);
+  }, [refreshKey]);
 
   if (!project) return <div className="p-8 text-slate-400">Import a project first.</div>;
 
   return (
     <div className="p-6 space-y-5 max-w-5xl">
       <h1 className="text-xl font-bold text-white">Persistent Regression Scheduler</h1>
-      <div className="bg-pw-panel border border-pw-border rounded-xl p-4 grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+      {error && (
+        <div className="p-3 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs">{error}</div>
+      )}
+      <div className="bg-pw-panel border border-pw-border rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -170,22 +225,27 @@ export const SchedulerPage: React.FC<{ project: ProjectConfig | null }> = ({ pro
         />
         <button
           onClick={async () => {
-            await window.pwControlCenter.saveSchedule({
-              projectId: project.id,
-              name,
-              cronExpression: cronExpr,
-              frequencyLabel: cronExpr,
-              environment,
-              browsers: ['chromium'],
-              mode: 'full',
-              workers: 4,
-              headed: false,
-              enabled: true,
-              webhookUrl,
-            });
-            load();
+            setError(null);
+            try {
+              await window.pwControlCenter.saveSchedule({
+                projectId: project.id,
+                name,
+                cronExpression: cronExpr,
+                frequencyLabel: cronExpr,
+                environment,
+                browsers: ['chromium'],
+                mode: 'full',
+                workers: 4,
+                headed: false,
+                enabled: true,
+                webhookUrl: webhookUrl.trim() ? webhookUrl.trim() : undefined,
+              });
+              load();
+            } catch (err: any) {
+              setError(err?.message || 'Failed to save schedule.');
+            }
           }}
-          className="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-1.5"
+          className="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-1.5 sm:col-span-2 lg:col-span-1"
         >
           <CalendarPlus className="w-4 h-4" /> Create Schedule
         </button>
@@ -198,8 +258,16 @@ export const SchedulerPage: React.FC<{ project: ProjectConfig | null }> = ({ pro
       </div>
 
       <div className="space-y-2">
+        {schedules.length === 0 && (
+          <div className="bg-pw-panel border border-pw-border rounded-lg p-6 text-center text-slate-500 text-xs">
+            No schedules yet. Create a cron schedule above to persist nightly regressions across app restarts.
+          </div>
+        )}
         {schedules.map((s) => (
-          <div key={s.id} className="bg-pw-panel border border-pw-border rounded-lg p-4 flex items-center justify-between text-xs">
+          <div
+            key={s.id}
+            className="bg-pw-panel border border-pw-border rounded-lg p-4 flex flex-wrap items-center justify-between gap-3 text-xs"
+          >
             <div>
               <div className="font-bold text-white">{s.name}</div>
               <div className="text-slate-400 font-mono mt-0.5">
@@ -208,9 +276,14 @@ export const SchedulerPage: React.FC<{ project: ProjectConfig | null }> = ({ pro
             </div>
             <button
               onClick={async () => {
-                await window.pwControlCenter.deleteSchedule(s.id);
-                load();
+                try {
+                  await window.pwControlCenter.deleteSchedule(s.id);
+                  load();
+                } catch (err: any) {
+                  setError(err?.message || 'Failed to delete schedule.');
+                }
               }}
+              title="Delete schedule"
               className="p-2 text-rose-400 hover:bg-rose-500/20 rounded"
             >
               <Trash2 className="w-4 h-4" />
@@ -227,9 +300,21 @@ export const SettingsPage: React.FC = () => {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [savedNotice, setSavedNotice] = useState(false);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   useEffect(() => {
-    window.pwControlCenter.getSettings().then(setSettings);
+    window.pwControlCenter
+      .getSettings()
+      .then(setSettings)
+      .catch((err) => {
+        console.error('[ControlCenter] Failed to load settings:', err);
+        setLoadError(err?.message || 'Failed to load settings.');
+      });
   }, []);
+
+  if (loadError) {
+    return <div className="p-6 text-rose-300 text-xs">Unable to load settings: {loadError}</div>;
+  }
 
   if (!settings) return null;
 
