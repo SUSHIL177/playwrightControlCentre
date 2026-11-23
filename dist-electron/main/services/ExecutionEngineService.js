@@ -224,7 +224,7 @@ class ExecutionEngineService {
             mainWindow?.webContents.send(ipcChannels_1.IPC.EXEC_LOG_EVENT, payload);
             onEvent?.(ipcChannels_1.IPC.EXEC_LOG_EVENT, payload);
         };
-        emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n`);
+        emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n[Working Directory] ${project.root_path}\n`);
         const child = (0, child_process_1.spawn)(executable, args, {
             cwd: project.root_path,
             env: childEnv,

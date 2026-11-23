@@ -10,3 +10,6 @@ playwright/.cache/
 *.webm
 dist/
 release/
+
+# In-repo verification harness build artifacts
+scripts/verify/.ui-smoke-*

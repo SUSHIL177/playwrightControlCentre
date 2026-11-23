@@ -275,7 +275,7 @@ export class ExecutionEngineService {
       onEvent?.(IPC.EXEC_LOG_EVENT, payload);
     };
 
-    emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n`);
+    emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n[Working Directory] ${project.root_path}\n`);
 
     const child = spawn(executable, args, {
       cwd: project.root_path,
