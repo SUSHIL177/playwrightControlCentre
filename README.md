@@ -1,0 +1,7 @@
+# Playwright Automation Control Center v1.2.0
+
+## Root-Cause Fixes in v1.2.0
+1. **Windows SQLite Disk Persistence (`db.ts`)**: Replaced `fs.renameSync(tmpFile, filePath)`—which intermittently fails on Windows with `EPERM` when antivirus or Electron reads the SQLite file—with direct atomic `fs.writeFileSync` so every execution batch, report, and discovered test persists across app restarts.
+2. **Playwright Config Reporter & Report Capture (`ExecutionEngineService.ts`)**: When a project's `playwright.config.ts` hardcodes `reporter: [['html', { outputFolder: 'playwright-report' }], ['json', { outputFile: 'results.json' }]]`, Playwright ignores `PLAYWRIGHT_HTML_REPORT` / `PLAYWRIGHT_JSON_OUTPUT_NAME`. `ExecutionEngineService` now checks both the isolated artifact folder and the project's default `results.json` / `playwright-report` directory, parses stdout list lines as a third fallback, and copies the native HTML report into the permanent archive.
+3. **Instant Test Explorer Discovery (`ProjectDiscoveryService.ts` + `TestExplorerPage.tsx`)**: Uses direct `node.exe node_modules/@playwright/test/cli.js test --list --reporter=json` (eliminating `npx.cmd` overhead) and auto-triggers discovery when switching to Test Explorer if 0 tests are cached.
+4. **Live Dashboard Charts (`DashboardPage.tsx`)**: Renders 4 real-time charts (Latest Batch Donut, Passed vs Failed Bar Chart, Pass % Trend Line, and Folder-Wise / Failure Category Bar Chart) immediately upon execution completion.

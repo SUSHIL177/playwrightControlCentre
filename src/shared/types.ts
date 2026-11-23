@@ -1,0 +1,259 @@
+export type NavRoute =
+  | 'dashboard'
+  | 'projects'
+  | 'explorer'
+  | 'execution'
+  | 'terminal'
+  | 'failures'
+  | 'healing'
+  | 'flaky'
+  | 'cross-browser'
+  | 'code-fix'
+  | 'performance'
+  | 'scheduler'
+  | 'reports'
+  | 'history'
+  | 'settings';
+
+export type BrowserType = 'chromium' | 'firefox' | 'webkit';
+export type TestStatus = 'passed' | 'failed' | 'skipped' | 'timedOut' | 'flaky' | 'running' | 'pending';
+export type FailureCategory =
+  | 'Application Defect'
+  | 'Locator Issue'
+  | 'Automation Script Issue'
+  | 'Timeout Issue'
+  | 'Synchronization Issue'
+  | 'Test Data Issue'
+  | 'Environment & Infrastructure Issue'
+  | 'Unknown';
+
+export type DefectClassification =
+  | 'Confirmed application defect'
+  | 'Suspected application defect'
+  | 'Automation defect'
+  | 'Environment issue'
+  | 'Test data issue'
+  | 'Unknown cause';
+
+export interface ProjectConfig {
+  id: string;
+  name: string;
+  rootPath: string;
+  configPath: string | null;
+  testDir: string;
+  playwrightVersion: string;
+  nodeVersion: string;
+  browsersInstalled: BrowserType[];
+  projectsConfigured: string[];
+  reporters: string[];
+  npmScripts: Record<string, string>;
+  hasTsConfig: boolean;
+  validationStatus: 'valid' | 'warning' | 'invalid';
+  validationMessages: string[];
+  createdAt: string;
+  lastScannedAt: string;
+}
+
+export interface DiscoveredTest {
+  id: string;
+  projectId: string;
+  title: string;
+  fullTitle: string;
+  suitePath: string[];
+  filePath: string;
+  relativePath: string;
+  folderPath: string;
+  line: number;
+  column: number;
+  tags: string[];
+  annotations: Array<{ type: string; description?: string }>;
+  projectName: string;
+  lastStatus?: TestStatus;
+  lastDurationMs?: number;
+  retryCount?: number;
+}
+
+export interface FolderNode {
+  name: string;
+  relativePath: string;
+  fullPath: string;
+  testCount: number;
+  children: FolderNode[];
+  specs: SpecFileNode[];
+}
+
+export interface SpecFileNode {
+  name: string;
+  relativePath: string;
+  fullPath: string;
+  testCount: number;
+  tests: DiscoveredTest[];
+}
+
+export interface ExecutionOptions {
+  projectId: string;
+  mode: 'full' | 'folder' | 'spec' | 'tests' | 'tag' | 'failed' | 'smoke';
+  targetPaths?: string[];
+  testIds?: string[];
+  grepPattern?: string;
+  tag?: string;
+  browsers: BrowserType[];
+  pwProjects?: string[];
+  headed: boolean;
+  workers?: number;
+  retries?: number;
+  timeoutMs?: number;
+  environment?: string;
+  description?: string;
+  parentExecutionId?: string;
+}
+
+export interface ExecutionBatch {
+  id: string;
+  projectId: string;
+  description: string;
+  mode: string;
+  environment: string;
+  browsers: BrowserType[];
+  tag?: string;
+  status: 'running' | 'completed' | 'failed' | 'stopped';
+  totalTests: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  timedOut: number;
+  flaky: number;
+  startTime: string;
+  endTime?: string;
+  durationMs: number;
+  htmlReportPath: string;
+  jsonReportPath: string;
+}
+
+export interface TestExecutionResult {
+  id: string;
+  executionId: string;
+  projectId: string;
+  testId: string;
+  testTitle: string;
+  fullTitle: string;
+  filePath: string;
+  folderPath: string;
+  browser: string;
+  status: TestStatus;
+  durationMs: number;
+  retry: number;
+  errorMessage?: string;
+  stackTrace?: string;
+  screenshotPath?: string;
+  videoPath?: string;
+  tracePath?: string;
+  timestamp: string;
+}
+
+export interface FailureAnalysisRecord {
+  id: string;
+  resultId: string;
+  executionId: string;
+  projectId: string;
+  testTitle: string;
+  filePath: string;
+  folderPath: string;
+  browser: string;
+  environment: string;
+  errorMessage: string;
+  stackTrace: string;
+  screenshotPath?: string;
+  tracePath?: string;
+  category: FailureCategory;
+  classification: DefectClassification;
+  probableRootCause: string;
+  confidence: number;
+  evidence: string[];
+  recommendedAction: string;
+  healingEligible: boolean;
+  manuallyReclassified: boolean;
+  createdAt: string;
+}
+
+export interface HealingProposal {
+  id: string;
+  failureId: string;
+  projectId: string;
+  testTitle: string;
+  targetFilePath: string;
+  originalCode: string;
+  proposedCode: string;
+  explanation: string;
+  confidence: number;
+  validationStatus: 'pending' | 'validated_pass' | 'validated_fail';
+  validationLog?: string;
+  status: 'pending' | 'approved' | 'rejected' | 'rolled_back';
+  backupFilePath?: string;
+  createdAt: string;
+  appliedAt?: string;
+}
+
+export interface FlakyTestMetric {
+  testId: string;
+  testTitle: string;
+  folderPath: string;
+  filePath: string;
+  totalRuns: number;
+  passCount: number;
+  failCount: number;
+  retryCount: number;
+  flakinessRate: number;
+  lastFailureDate: string;
+  commonReason: string;
+  browsersAffected: string[];
+  trend: 'newly_flaky' | 'consistently_flaky' | 'stabilized';
+}
+
+export interface ScheduleConfig {
+  id: string;
+  projectId: string;
+  name: string;
+  cronExpression: string;
+  frequencyLabel: string;
+  environment: string;
+  browsers: BrowserType[];
+  mode: 'full' | 'smoke' | 'tag';
+  tag?: string;
+  workers: number;
+  headed: boolean;
+  enabled: boolean;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  webhookUrl?: string;
+  notifyEmail?: string;
+}
+
+export interface AIProviderSettings {
+  provider: 'gemini' | 'openai' | 'ollama' | 'heuristic_offline';
+  apiKeyConfigured: boolean;
+  model: string;
+  endpoint: string;
+  analysisEnabled: boolean;
+  healingEnabled: boolean;
+}
+
+export interface AppSettings {
+  defaultProjectId: string;
+  defaultBrowser: BrowserType;
+  defaultEnvironment: string;
+  defaultHeaded: boolean;
+  defaultWorkers: number;
+  defaultRetries: number;
+  reportRetentionDays: number;
+  flakyMinRuns: number;
+  theme: 'dark' | 'light';
+  ai: AIProviderSettings;
+}
+
+export interface TerminalLogChunk {
+  executionId: string;
+  stream: 'stdout' | 'stderr' | 'system';
+  text: string;
+  timestamp: string;
+}
