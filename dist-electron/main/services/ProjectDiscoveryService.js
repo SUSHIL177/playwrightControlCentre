@@ -248,6 +248,7 @@ class ProjectDiscoveryService {
             const { stdout } = await execFileAsync(executable, cliArgs, {
                 cwd: project.rootPath,
                 maxBuffer: 1024 * 1024 * 32,
+                timeout: 120_000, // never wedge import/discovery on a hung CLI — disk scan already has results
                 shell: !useDirectNode && process.platform === 'win32',
                 env: cleanEnv,
             });

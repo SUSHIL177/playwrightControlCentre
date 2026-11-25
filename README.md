@@ -1,3 +1,15 @@
+# Playwright Automation Control Center v1.5.1
+
+## What's New in v1.5.1 (dashboard revamp, workers picker, stop control, collapsible sidebar)
+
+1. **Stop an execution from anywhere (`App.tsx`, `ExecutionCenterPage.tsx`, `LiveTerminalPanel.tsx`)**: a **Stop** button now appears in the header whenever a batch is running (with a confirm dialog; partial results are finalized and kept as `stopped`), on the **Execution Center** as "Stop Running Batch", and remains in the live terminal — one click, SIGTERM to the Playwright process, the run is closed out cleanly and recorded.
+2. **KPI cards flip — latest vs all-time (`DashboardPage.tsx`, `index.css`)**: the six cards (Discovered Tests, Total Passed, Total Failed, Pass Rate, Flaky/Skipped, Avg Duration) show the **latest execution** by default (marked `LATEST`); hover or tab to a card and it flips in 3D to show **all-time totals** (marked `ALL TIME`). Accessible via keyboard focus, honors `prefers-reduced-motion`.
+3. **Weekly Analytics with selectable range (`DashboardPage.tsx`, `utils/weekly.ts`)**: new panel with **2W / 4W / 8W / 12W presets or a custom From–To date range** clamped by a **weekly limit selector** (2/4/8/12/26 weeks). Shows passed-vs-failed and pass-% per week, a per-week table (runs, executed, passed, failed, pass %, avg min) and a range summary strip (runs, executed, pass rate). Weeks are Monday-start buckets.
+4. **Run Full Regression — pick your workers (`WorkersModal.tsx`)**: the quick-run buttons on Dashboard and Reports Center no longer assume 4 workers. A modal lets you choose 1 / 2 / 4 / 8 or a custom 1–32 value before launching; the batch honors the chosen parallelism. The Execution Center's worker input is unchanged and stays authoritative there.
+5. **Collapsible sidebar (`Sidebar.tsx`)**: the left menu now has a **Collapse / Expand** toggle (bottom of the rail) that switches between the full `md:w-64` menu and the `w-14` icon rail — persisted in `localStorage` (`pacc.sidebar.collapsed`), with tooltips on icon-only items; mobile behavior unchanged.
+
+Verification (all passing): `npm run typecheck`, `npm run build`, `node scripts/verify/healing-e2e.js` (6/6), `node scripts/verify/ui-smoke.js` — all existing checks plus new ones covering: flip-card faces, Weekly Analytics panel + weekly table, workers modal flow (button → preset 8 → confirm → `startExecution({workers: 8})`), sidebar collapse/expand persistence, and stop-control visibility while a batch is running.
+
 # Playwright Automation Control Center v1.5.0
 
 **Desktop app unchanged. Now also a hosted multi-user web app** — one instance, your whole team signs in,

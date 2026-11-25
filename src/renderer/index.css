@@ -16,3 +16,36 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #475569;
 }
+
+/* KPI flip cards — front: latest execution; back: all-time. Hover/focus flips. */
+.kpi-flip {
+  perspective: 900px;
+  outline: none;
+}
+.kpi-flip-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.55s cubic-bezier(0.4, 0.2, 0.2, 1);
+}
+.kpi-flip:hover .kpi-flip-inner,
+.kpi-flip:focus-visible .kpi-flip-inner,
+.kpi-flip:focus-within .kpi-flip-inner {
+  transform: rotateY(180deg);
+}
+.kpi-flip-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  border-radius: 0.75rem;
+}
+.kpi-flip-back {
+  transform: rotateY(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .kpi-flip-inner {
+    transition: none;
+  }
+}

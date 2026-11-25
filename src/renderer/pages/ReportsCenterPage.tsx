@@ -15,6 +15,7 @@ import { ExecutionBatch } from '@shared/types';
 import { DESKTOP_CAPS, fetchCapabilities, type WebCapabilities } from '../webMode';
 import { batchFullLabel, batchShortLabel, statusAppearance } from '../utils/batchFormat';
 import { formatMinutes } from '@shared/format';
+import { WorkersModal } from '../components/WorkersModal';
 
 type StatusFilter = 'all' | 'completed' | 'failed' | 'stopped';
 
@@ -28,8 +29,9 @@ const FILTERS: Array<{ id: StatusFilter; label: string }> = [
 export const ReportsCenterPage: React.FC<{
   batches: ExecutionBatch[];
   onRefresh: () => Promise<void>;
-  onRunSuite: () => void;
+  onRunSuite: (workers: number) => void;
 }> = ({ batches, onRefresh, onRunSuite }) => {
+  const [workersModalOpen, setWorkersModalOpen] = useState(false);
   const [hostedUrl, setHostedUrl] = useState<string | null>(null);
   const [caps, setCaps] = useState<WebCapabilities>(DESKTOP_CAPS);
   useEffect(() => {
@@ -121,7 +123,7 @@ export const ReportsCenterPage: React.FC<{
           </p>
           {batches.length === 0 && (
             <button
-              onClick={onRunSuite}
+              onClick={() => setWorkersModalOpen(true)}
               className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold inline-flex items-center gap-2"
             >
               <Play className="w-4 h-4 fill-current" /> Run Full Regression
@@ -251,6 +253,19 @@ export const ReportsCenterPage: React.FC<{
           })}
         </div>
       )}
+
+      <WorkersModal
+        open={workersModalOpen}
+        title="Run Full Regression Suite"
+        description="Pick how many Playwright workers run in parallel for this batch — instead of always using 4."
+        confirmLabel="Start Regression Run"
+        defaultWorkers={4}
+        onConfirm={(workers) => {
+          setWorkersModalOpen(false);
+          onRunSuite(workers);
+        }}
+        onClose={() => setWorkersModalOpen(false)}
+      />
     </div>
   );
 };

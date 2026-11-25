@@ -9,6 +9,7 @@ import {
   ProjectConfig,
   TerminalLogChunk,
 } from '@shared/types';
+import { Square } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { TeamPage } from './pages/TeamPage';
 import { fetchCapabilities, DESKTOP_CAPS, type WebCapabilities } from './webMode';
@@ -219,6 +220,22 @@ export default function App() {
             >
               {isRunning ? 'EXECUTING' : 'IDLE'}
             </span>
+            {isRunning && (
+              <button
+                onClick={async () => {
+                  if (!window.confirm('Stop the running batch? Tests that already finished will be kept.')) return;
+                  try {
+                    await window.pwControlCenter.stopExecution();
+                  } catch (err: any) {
+                    console.error('[ControlCenter] Stop failed:', err);
+                  }
+                }}
+                title="Stop the running batch (SIGTERM — partial results are kept)"
+                className="px-2.5 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-semibold flex items-center gap-1.5"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" /> Stop
+              </button>
+            )}
           </div>
         </header>
 
@@ -232,12 +249,12 @@ export default function App() {
               onRefresh={async () => {
                 if (activeProject) await loadProjectData(activeProject.id);
               }}
-              onQuickRun={() =>
+              onQuickRun={(workers: number) =>
                 handleStartExecution({
                   mode: 'full',
                   browsers: ['chromium'],
                   headed: false,
-                  workers: 4,
+                  workers,
                   description: 'Full Regression Suite',
                 })
               }
@@ -270,6 +287,8 @@ export default function App() {
               project={activeProject}
               batches={batches}
               onStartExecution={handleStartExecution}
+              isRunning={isRunning}
+              onStopExecution={() => window.pwControlCenter.stopExecution()}
             />
           )}
 
@@ -319,12 +338,12 @@ export default function App() {
               onRefresh={async () => {
                 if (activeProject) await loadProjectData(activeProject.id);
               }}
-              onRunSuite={() =>
+              onRunSuite={(workers: number) =>
                 handleStartExecution({
                   mode: 'full',
                   browsers: ['chromium'],
                   headed: false,
-                  workers: 4,
+                  workers,
                   description: 'Full Regression Suite',
                 })
               }

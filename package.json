@@ -1,6 +1,6 @@
 {
   "name": "playwright-automation-control-center",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Playwright Automation Control Center - AI-Powered Test Execution, Analytics, Failure Intelligence & Self-Healing Platform (Desktop + hosted multi-user web)",
   "main": "dist-electron/main/index.js",
   "scripts": {
