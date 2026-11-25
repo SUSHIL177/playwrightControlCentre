@@ -26,6 +26,10 @@ const electronMock = {
   },
   shell: { openPath: async () => '', showItemInFolder: () => {} },
 };
+// The tenant/data layer resolves its default root from PACC_DATA_DIR before Electron's userData —
+// point it at the same temp dir the mock hands to Electron so runs stay hermetic.
+process.env.PACC_DATA_DIR = userData;
+
 const electronPath = require.resolve('electron', { paths: [REPO] });
 require.cache[electronPath] = {
   id: electronPath,

@@ -4,16 +4,29 @@ import App from './App';
 import './index.css';
 
 if (!window.pwControlCenter) {
-  const BRIDGE_URL = 'http://127.0.0.1:17890';
+  // Same-origin: in hosted web mode the SPA is served by the pacc web server itself;
+  // this also works for a plain-browser desktop fallback pointed at 127.0.0.1:17890.
+  const BRIDGE_URL = '';
   const rpc = async (method: string, ...args: any[]) => {
     const resp = await fetch(`${BRIDGE_URL}/api/rpc`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-pacc-web': '1' },
       body: JSON.stringify({ method, args }),
     });
+    if (resp.status === 401) {
+      window.location.assign('/login');
+      throw new Error('Authentication required');
+    }
     const data = await resp.json();
     if (!data.ok) throw new Error(data.error || 'Bridge RPC failed');
     return data.result;
+  };
+  // Hosted mode answers these methods with a same-origin URL instead of a native action — open it.
+  const openIfUrl = (result: any) => {
+    if (typeof result === 'string' && result.startsWith('/')) {
+      window.open(result, '_blank', 'noopener');
+    }
+    return result;
   };
 
   let evtSource: EventSource | null = null;
@@ -38,6 +51,8 @@ if (!window.pwControlCenter) {
 
   window.pwControlCenter = {
     browseDirectory: () => rpc('browseDirectory'),
+    importProjectFromGit: (req: any) => rpc('importProjectFromGit', req),
+    hasGitToken: () => rpc('hasGitToken'),
     importProject: (p: string) => rpc('importProject', p),
     listProjects: () => rpc('listProjects'),
     deleteProject: (id: string) => rpc('deleteProject', id),
@@ -55,12 +70,12 @@ if (!window.pwControlCenter) {
     getExecutionResults: (id: string) => rpc('getExecutionResults', id),
     compareBatches: (a: string, b: string) => rpc('compareBatches', a, b),
     deleteBatch: (id: string) => rpc('deleteBatch', id),
-    openReportInBrowser: (p: string) => rpc('openReportInBrowser', p),
+    openReportInBrowser: async (p: string) => openIfUrl(await rpc('openReportInBrowser', p)),
     startReportHosting: (p: string) => rpc('startReportHosting', p),
     revealReportInFolder: (p: string) => rpc('revealReportInFolder', p),
     listArtifacts: (id: string) => rpc('listArtifacts', id),
     previewArtifact: (id: string, rel: string) => rpc('previewArtifact', id, rel),
-    openArtifact: (id: string, rel: string) => rpc('openArtifact', id, rel),
+    openArtifact: async (id: string, rel: string) => openIfUrl(await rpc('openArtifact', id, rel)),
     revealArtifact: (id: string, rel: string) => rpc('revealArtifact', id, rel),
     analyzeBatchFailures: (id: string) => rpc('analyzeBatchFailures', id),
     listFailures: (id: string) => rpc('listFailures', id),

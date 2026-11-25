@@ -5,12 +5,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PersistentSqliteDB = void 0;
 exports.initDb = initDb;
+exports.openUserDatabase = openUserDatabase;
+exports.openRawDatabase = openRawDatabase;
+exports.closeUserDatabase = closeUserDatabase;
 exports.getDb = getDb;
 const sql_js_1 = __importDefault(require("sql.js"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
-const electron_1 = require("electron");
 const pathSecurity_1 = require("../utils/pathSecurity");
+const tenant_1 = require("../platform/tenant");
 class PersistentSqliteDB {
     rawDb;
     filePath;
@@ -98,25 +101,64 @@ class PersistentSqliteDB {
 }
 exports.PersistentSqliteDB = PersistentSqliteDB;
 let dbInstance = null;
-async function initDb() {
-    if (dbInstance)
-        return dbInstance;
+const userDatabases = new Map();
+async function openDatabase(filePath, migrate = true) {
     const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm');
     const SQL = await (0, sql_js_1.default)({
         locateFile: () => wasmPath,
     });
-    const userDataDir = electron_1.app.getPath('userData');
-    const dbDir = path_1.default.join(userDataDir, 'data');
-    (0, pathSecurity_1.ensureDirSync)(dbDir);
-    const dbPath = path_1.default.join(dbDir, 'playwright_control_center.sqlite');
-    const existingBytes = fs_1.default.existsSync(dbPath) ? fs_1.default.readFileSync(dbPath) : undefined;
+    (0, pathSecurity_1.ensureDirSync)(path_1.default.dirname(filePath));
+    const existingBytes = fs_1.default.existsSync(filePath) ? fs_1.default.readFileSync(filePath) : undefined;
     const rawDb = existingBytes ? new SQL.Database(existingBytes) : new SQL.Database();
-    dbInstance = new PersistentSqliteDB(rawDb, dbPath);
-    dbInstance.exec('PRAGMA foreign_keys = ON;');
-    runMigrations(dbInstance);
+    const db = new PersistentSqliteDB(rawDb, filePath);
+    db.exec('PRAGMA foreign_keys = ON;');
+    if (migrate)
+        runMigrations(db);
+    return db;
+}
+/** Desktop / single-tenant bootstrap — unchanged behavior (data stays in the app's userData dir). */
+async function initDb() {
+    if (dbInstance)
+        return dbInstance;
+    const dbPath = path_1.default.join((0, tenant_1.defaultDataRoot)(), 'data', 'playwright_control_center.sqlite');
+    dbInstance = await openDatabase(dbPath);
     return dbInstance;
 }
+/**
+ * Hosted mode: open (or create) the private database for one tenant. Every user gets a
+ * fully separate SQLite file — no cross-user rows ever share a table. Databases stay
+ * cached for the lifetime of the process.
+ */
+async function openUserDatabase(tenantRoot, userId) {
+    const cached = userDatabases.get(userId);
+    if (cached)
+        return cached;
+    const dbPath = path_1.default.join(tenantRoot, 'data', 'playwright_control_center.sqlite');
+    const db = await openDatabase(dbPath);
+    userDatabases.set(userId, db);
+    return db;
+}
+/** Hub database (web mode accounts/sessions). Shares the same migration runner minus app tables. */
+async function openRawDatabase(filePath) {
+    return openDatabase(filePath, false);
+}
+/** Drop a tenant's cached database handle (used when an account is deleted). */
+function closeUserDatabase(userId) {
+    const cached = userDatabases.get(userId);
+    if (cached) {
+        userDatabases.delete(userId);
+        try {
+            cached.flush();
+        }
+        catch {
+            /* best effort — the file is being wiped anyway */
+        }
+    }
+}
 function getDb() {
+    const tenantDb = (0, tenant_1.tenantContext)()?.db;
+    if (tenantDb)
+        return tenantDb;
     if (!dbInstance) {
         throw new Error('SQLite database has not been initialized yet.');
     }

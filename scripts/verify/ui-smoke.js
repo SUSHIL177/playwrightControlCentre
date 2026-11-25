@@ -7,7 +7,6 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const assert = require('assert');
-const { execFileSync } = require('child_process');
 
 const REPO = path.join(__dirname, '..', '..');
 const entry = path.join(REPO, 'scripts', 'verify', '.ui-smoke-entry.cjs');
@@ -25,14 +24,17 @@ createRoot(el).render(React.createElement(App));
 );
 
 try {
-  const esbuildBin = require.resolve('esbuild/bin/esbuild', { paths: [REPO] });
-  execFileSync(
-    esbuildBin,
-    [entry, '--bundle', '--platform=node', '--format=cjs',
-     `--outfile=${bundle}`, '--jsx=automatic', '--loader:.css=empty', '--loader:.svg=empty', '--loader:.png=empty',
-     '--log-level=error'],
-    { cwd: REPO, stdio: 'inherit' }
-  );
+  const esbuild = require('esbuild');
+  esbuild.buildSync({
+    entryPoints: [entry],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    outfile: bundle,
+    jsx: 'automatic',
+    loader: { '.css': 'empty', '.svg': 'empty', '.png': 'empty' },
+    logLevel: 'error',
+  });
 } catch (e) {
   console.error('esbuild bundle failed');
   process.exit(1);

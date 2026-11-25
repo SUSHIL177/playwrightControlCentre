@@ -16,6 +16,8 @@ import {
   History,
   FolderSearch,
   Settings,
+  Users,
+  LogOut,
 } from 'lucide-react';
 import { NavRoute } from '@shared/types';
 
@@ -25,6 +27,11 @@ interface SidebarProps {
   failureCount: number;
   proposalCount: number;
   reportCount: number;
+  /** Hosted mode extras */
+  webMode?: boolean;
+  isAdmin?: boolean;
+  username?: string | null;
+  onSignOut?: () => void;
 }
 
 const NAV_ITEMS: Array<{ id: NavRoute; label: string; icon: React.FC<{ className?: string }> }> = [
@@ -44,6 +51,7 @@ const NAV_ITEMS: Array<{ id: NavRoute; label: string; icon: React.FC<{ className
   { id: 'history', label: 'Execution History', icon: History },
   { id: 'artifacts', label: 'Test Artifacts', icon: FolderSearch },
   { id: 'settings', label: 'Settings', icon: Settings },
+  { id: 'team', label: 'Team Access', icon: Users },
 ];
 
 const badgeFor = (id: NavRoute, failureCount: number, proposalCount: number, reportCount: number): number | null => {
@@ -66,7 +74,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   failureCount,
   proposalCount,
   reportCount,
+  webMode = false,
+  isAdmin = false,
+  username = null,
+  onSignOut,
 }) => {
+  const items = NAV_ITEMS.filter((item) => item.id !== 'team' || (webMode && isAdmin));
   return (
     <aside className="w-14 md:w-64 shrink-0 bg-pw-slate border-r border-pw-border flex flex-col h-full select-none transition-all duration-200">
       <div className="h-14 px-2 md:px-4 flex items-center gap-3 border-b border-pw-border justify-center md:justify-start">
@@ -80,7 +93,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2 px-1.5 md:px-2 space-y-0.5">
-        {NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const Icon = item.icon;
           const active = activeRoute === item.id;
           const count = badgeFor(item.id, failureCount, proposalCount, reportCount);
@@ -111,6 +124,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
         })}
       </nav>
+
+      {webMode && (
+        <div className="border-t border-pw-border p-2 md:p-3 shrink-0">
+          <div className="hidden md:flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Signed in</div>
+              <div className="text-xs font-semibold text-slate-200 truncate">{username || '…'}</div>
+            </div>
+            <button
+              onClick={onSignOut}
+              title="Sign out"
+              aria-label="Sign out"
+              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+          <button
+            onClick={onSignOut}
+            title="Sign out"
+            aria-label="Sign out"
+            className="md:hidden w-full p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white flex justify-center"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </aside>
   );
 };

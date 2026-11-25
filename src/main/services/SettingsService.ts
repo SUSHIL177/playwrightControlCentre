@@ -1,4 +1,4 @@
-import { safeStorage } from 'electron';
+import { encryptSecret, decryptSecret } from '../platform/runtime';
 import { AppSettings } from '../../shared/types';
 import { getDb } from '../database/db';
 
@@ -58,9 +58,7 @@ export class SettingsService {
       db.prepare(`DELETE FROM app_settings WHERE key = 'ai_api_key_enc'`).run();
       return;
     }
-    const payload = safeStorage.isEncryptionAvailable()
-      ? safeStorage.encryptString(rawApiKey.trim()).toString('base64')
-      : Buffer.from(rawApiKey.trim(), 'utf-8').toString('base64');
+    const payload = encryptSecret(rawApiKey.trim());
 
     db.prepare(`
       INSERT INTO app_settings (key, value) VALUES ('ai_api_key_enc', ?)
@@ -68,11 +66,35 @@ export class SettingsService {
     `).run(payload);
   }
 
+  saveGitToken(rawToken: string): void {
+    const db = getDb();
+    const token = rawToken.trim();
+    if (!token) {
+      db.prepare(`DELETE FROM app_settings WHERE key = 'git_import_token_enc'`).run();
+      return;
+    }
+    db.prepare(`
+      INSERT INTO app_settings (key, value) VALUES ('git_import_token_enc', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(encryptSecret(token));
+  }
+
+  getGitToken(): string | null {
+    const db = getDb();
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'git_import_token_enc'`).get() as { value: string } | undefined;
+    if (!row) return null;
+    return decryptSecret(row.value);
+  }
+
+  hasGitToken(): boolean {
+    const db = getDb();
+    return Boolean(db.prepare(`SELECT value FROM app_settings WHERE key = 'git_import_token_enc'`).get());
+  }
+
   getApiKey(): string | null {
     const db = getDb();
     const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'ai_api_key_enc'`).get() as { value: string } | undefined;
     if (!row) return null;
-    const buf = Buffer.from(row.value, 'base64');
-    return safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(buf) : buf.toString('utf-8');
+    return decryptSecret(row.value);
   }
 }

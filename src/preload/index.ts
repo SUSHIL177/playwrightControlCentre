@@ -5,6 +5,7 @@ import {
   DefectClassification,
   ExecutionOptions,
   FailureCategory,
+  GitImportRequest,
   HealingProgressEvent,
   ScheduleConfig,
   TerminalLogChunk,
@@ -13,6 +14,8 @@ import {
 const controlCenterAPI = {
   browseDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.PROJECT_BROWSE_DIR),
   importProject: (projectPath: string) => ipcRenderer.invoke(IPC.PROJECT_IMPORT, projectPath),
+  importProjectFromGit: (req: GitImportRequest) => ipcRenderer.invoke(IPC.PROJECT_IMPORT_FROM_GIT, req),
+  hasGitToken: (): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS_HAS_GIT_TOKEN),
   listProjects: () => ipcRenderer.invoke(IPC.PROJECT_LIST),
   deleteProject: (projectId: string) => ipcRenderer.invoke(IPC.PROJECT_DELETE, projectId),
   rescanProject: (projectId: string) => ipcRenderer.invoke(IPC.PROJECT_RESCAN, projectId),

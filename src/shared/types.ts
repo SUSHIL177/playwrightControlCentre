@@ -14,7 +14,8 @@ export type NavRoute =
   | 'scheduler'
   | 'reports'
   | 'history'
-  | 'settings';
+  | 'settings'
+  | 'team';
 
 export type BrowserType = 'chromium' | 'firefox' | 'webkit';
 export type TestStatus = 'passed' | 'failed' | 'skipped' | 'timedOut' | 'flaky' | 'running' | 'pending';
@@ -250,6 +251,17 @@ export interface AppSettings {
   flakyMinRuns: number;
   theme: 'dark' | 'light';
   ai: AIProviderSettings;
+}
+
+export interface GitImportRequest {
+  url: string;
+  /** HTTPS personal access token — used for this clone only, never stored unless rememberToken is set. */
+  token?: string;
+  branch?: string;
+  /** Persist the token (encrypted) as this instance's git import token. */
+  rememberToken?: boolean;
+  /** Use the instance's saved token instead of req.token. */
+  useSavedToken?: boolean;
 }
 
 export interface TerminalLogChunk {

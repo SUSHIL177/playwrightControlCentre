@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ExternalLink,
   Share2,
@@ -12,7 +12,9 @@ import {
   Loader2,
 } from 'lucide-react';
 import { ExecutionBatch } from '@shared/types';
+import { DESKTOP_CAPS, fetchCapabilities, type WebCapabilities } from '../webMode';
 import { batchFullLabel, batchShortLabel, statusAppearance } from '../utils/batchFormat';
+import { formatMinutes } from '@shared/format';
 
 type StatusFilter = 'all' | 'completed' | 'failed' | 'stopped';
 
@@ -29,6 +31,10 @@ export const ReportsCenterPage: React.FC<{
   onRunSuite: () => void;
 }> = ({ batches, onRefresh, onRunSuite }) => {
   const [hostedUrl, setHostedUrl] = useState<string | null>(null);
+  const [caps, setCaps] = useState<WebCapabilities>(DESKTOP_CAPS);
+  useEffect(() => {
+    fetchCapabilities().then(setCaps).catch(() => undefined);
+  }, []);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -72,9 +78,14 @@ export const ReportsCenterPage: React.FC<{
           </p>
         </div>
         {hostedUrl && (
-          <div className="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-mono break-all">
-            Hosted LAN URL: {hostedUrl}
-          </div>
+          <a
+            href={hostedUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-mono break-all hover:bg-emerald-500/25"
+          >
+            {caps.webMode ? 'Report URL' : 'Hosted LAN URL'}: {hostedUrl}
+          </a>
         )}
       </div>
 
@@ -144,7 +155,7 @@ export const ReportsCenterPage: React.FC<{
                     <p className="text-[11px] text-slate-400 mt-0.5">{batchFullLabel(b)}</p>
                   </div>
                   <div className="text-right shrink-0">
-                    <div className="text-lg font-bold text-white">{(b.durationMs / 1000).toFixed(1)}s</div>
+                    <div className="text-lg font-bold text-white">{formatMinutes(b.durationMs)}</div>
                     <div className="text-[10px] uppercase text-slate-500">duration</div>
                   </div>
                 </div>
@@ -196,26 +207,29 @@ export const ReportsCenterPage: React.FC<{
                         withBatchAction(b.id, async () => {
                           const url = await window.pwControlCenter.startReportHosting(b.htmlReportPath);
                           setHostedUrl(url);
+                          if (caps.webMode && typeof url === 'string' && url.startsWith('/')) window.open(url, '_blank', 'noopener');
                         })
                       }
                       disabled={busyId === b.id}
-                      title="Host this report on your LAN (port 9323)"
+                      title={caps.webMode ? 'Open the archived report' : 'Host this report on your LAN (port 9323)'}
                       className="inline-flex items-center gap-1 px-2 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-100 text-[11px] font-medium"
                     >
                       <Share2 className="w-3 h-3" /> Share
                     </button>
-                    <button
-                      onClick={() =>
-                        withBatchAction(b.id, async () => {
-                          await window.pwControlCenter.revealReportInFolder(b.htmlReportPath);
-                        })
-                      }
-                      disabled={busyId === b.id}
-                      title="Reveal report.html in the folder"
-                      className="inline-flex items-center gap-1 px-2 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium"
-                    >
-                      <FolderOpen className="w-3 h-3" /> Folder
-                    </button>
+                    {!caps.webMode && (
+                      <button
+                        onClick={() =>
+                          withBatchAction(b.id, async () => {
+                            await window.pwControlCenter.revealReportInFolder(b.htmlReportPath);
+                          })
+                        }
+                        disabled={busyId === b.id}
+                        title="Reveal report.html in the folder"
+                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium"
+                      >
+                        <FolderOpen className="w-3 h-3" /> Folder
+                      </button>
+                    )}
                     <button
                       onClick={() =>
                         withBatchAction(b.id, async () => {

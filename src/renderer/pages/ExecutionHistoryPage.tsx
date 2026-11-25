@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { ExecutionBatch, TestExecutionResult, TestStatus } from '@shared/types';
 import { batchFullLabel, batchShortLabel, statusAppearance } from '../utils/batchFormat';
+import { formatMinutes, toMinutes } from '@shared/format';
 
 interface CompareResult {
   newlyFailing: any[];
@@ -39,11 +40,11 @@ const SmallStatusPill: React.FC<{ status: TestStatus | string }> = ({ status }) 
 
 const toCsv = (batchId: string, rows: TestExecutionResult[]): string => {
   const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const header = ['Run', 'Test Title', 'Full Title', 'File', 'Browser', 'Status', 'Duration (ms)', 'Retry', 'Error'];
+  const header = ['Run', 'Test Title', 'Full Title', 'File', 'Browser', 'Status', 'Duration (min)', 'Retry', 'Error'];
   const lines = [header.map(esc).join(',')];
   for (const r of rows) {
     lines.push(
-      [batchId, r.testTitle, r.fullTitle, r.filePath, r.browser, r.status, r.durationMs, r.retry, r.errorMessage || '']
+      [batchId, r.testTitle, r.fullTitle, r.filePath, r.browser, r.status, toMinutes(r.durationMs), r.retry, r.errorMessage || '']
         .map(esc)
         .join(',')
     );
@@ -318,7 +319,7 @@ export const ExecutionHistoryPage: React.FC<{
                         <span className="text-slate-500"> / </span>
                         <span className="text-slate-400">{b.skipped}</span>
                       </td>
-                      <td className="p-3 text-slate-300 whitespace-nowrap">{(b.durationMs / 1000).toFixed(1)}s</td>
+                      <td className="p-3 text-slate-300 whitespace-nowrap">{formatMinutes(b.durationMs)}</td>
                       <td className="p-3">
                         <span className={`px-2 py-0.5 rounded border text-[10px] font-bold ${appearance.classes}`}>
                           {appearance.label}
@@ -388,7 +389,7 @@ export const ExecutionHistoryPage: React.FC<{
                                         <td className="p-2 text-slate-100 font-medium max-w-[260px]" title={r.fullTitle}>{r.testTitle}</td>
                                         <td className="p-2 font-mono text-slate-400 max-w-[220px] truncate" title={r.filePath}>{r.filePath}</td>
                                         <td className="p-2 text-slate-300">{r.browser}</td>
-                                        <td className="p-2 text-slate-300 whitespace-nowrap">{(r.durationMs / 1000).toFixed(2)}s</td>
+                                        <td className="p-2 text-slate-300 whitespace-nowrap">{formatMinutes(r.durationMs)}</td>
                                         <td className="p-2 text-slate-400">{r.retry}</td>
                                         <td className="p-2 font-mono text-rose-300 max-w-[280px] truncate" title={r.errorMessage || ''}>
                                           {r.errorMessage ? r.errorMessage.split('\n')[0] : '—'}

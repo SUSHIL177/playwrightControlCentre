@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'crypto';
 import {
   DefectClassification,
   FailureAnalysisRecord,
@@ -154,7 +154,7 @@ export class FailureIntelligenceService {
         clearTimeout(timer);
         let log = `${stdout}\n${stderr}`.trim();
         if (spawnError) log += `${log ? '\n' : ''}[Control Center] Failed to launch Playwright: ${spawnError}`;
-        if (timedOut) log += `${log ? '\n' : ''}[Control Center] Timed out after ${Math.round(timeoutMs / 1000)}s — process killed.`;
+        if (timedOut) log += `${log ? '\n' : ''}[Control Center] Timed out after ${(timeoutMs / 60000).toFixed(1)} min — process killed.`;
         resolve({ exitCode: code, log, timedOut, spawnError, executableLabel });
       });
     });

@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
+const runtime_1 = require("./platform/runtime");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const chokidar_1 = __importDefault(require("chokidar"));
@@ -17,6 +18,9 @@ const SchedulerAndReportService_1 = require("./services/SchedulerAndReportServic
 const SettingsService_1 = require("./services/SettingsService");
 const ArtifactCatalogService_1 = require("./services/ArtifactCatalogService");
 const LocalBridgeServer_1 = require("./server/LocalBridgeServer");
+const tenant_1 = require("./platform/tenant");
+// Keep desktop data where it always was; the web server never calls this (uses PACC_DATA_DIR / ~/.pacc).
+(0, tenant_1.configureElectronUserData)(() => electron_1.app.getPath('userData'));
 let mainWindow = null;
 let specWatcher = null;
 const settingsService = new SettingsService_1.SettingsService();
@@ -63,6 +67,26 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.PROJECT_IMPORT, async (_, projectPath) => {
         return discoveryService.importProject(projectPath);
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.SETTINGS_HAS_GIT_TOKEN, () => {
+        return settingsService.hasGitToken();
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.PROJECT_IMPORT_FROM_GIT, async (_, req) => {
+        let token = req?.token;
+        if (req?.useSavedToken) {
+            token = settingsService.getGitToken() ?? undefined;
+            if (!token)
+                throw new Error('No saved git token on this instance.');
+        }
+        const project = await discoveryService.importProjectFromGit({
+            url: req?.url,
+            token,
+            branch: req?.branch,
+        });
+        if (req?.rememberToken && token) {
+            settingsService.saveGitToken(token);
+        }
+        return project;
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.PROJECT_LIST, () => {
         return discoveryService.listProjects();
@@ -182,10 +206,10 @@ function registerIpcHandlers() {
         if (!htmlReportPath)
             throw new Error('No report path provided.');
         if (fs_1.default.existsSync(htmlReportPath)) {
-            electron_1.shell.showItemInFolder(htmlReportPath);
+            (0, runtime_1.revealInFolder)(htmlReportPath);
         }
         else {
-            electron_1.shell.openPath(path_1.default.dirname(htmlReportPath));
+            void (0, runtime_1.openPath)(path_1.default.dirname(htmlReportPath));
         }
         return true;
     });

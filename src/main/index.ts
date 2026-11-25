@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { openPath, revealInFolder } from './platform/runtime';
 import path from 'path';
 import fs from 'fs';
 import chokidar, { FSWatcher } from 'chokidar';
@@ -12,6 +13,11 @@ import { SchedulerAndReportService } from './services/SchedulerAndReportService'
 import { SettingsService } from './services/SettingsService';
 import { ArtifactCatalogService } from './services/ArtifactCatalogService';
 import { LocalBridgeServer } from './server/LocalBridgeServer';
+import { configureElectronUserData } from './platform/tenant';
+import { GitImportRequest } from '../shared/types';
+
+// Keep desktop data where it always was; the web server never calls this (uses PACC_DATA_DIR / ~/.pacc).
+configureElectronUserData(() => app.getPath('userData'));
 
 let mainWindow: BrowserWindow | null = null;
 let specWatcher: FSWatcher | null = null;
@@ -73,6 +79,25 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC.PROJECT_IMPORT, async (_, projectPath: string) => {
     return discoveryService.importProject(projectPath);
+  });
+  ipcMain.handle(IPC.SETTINGS_HAS_GIT_TOKEN, () => {
+    return settingsService.hasGitToken();
+  });
+  ipcMain.handle(IPC.PROJECT_IMPORT_FROM_GIT, async (_, req: GitImportRequest) => {
+    let token = req?.token;
+    if (req?.useSavedToken) {
+      token = settingsService.getGitToken() ?? undefined;
+      if (!token) throw new Error('No saved git token on this instance.');
+    }
+    const project = await discoveryService.importProjectFromGit({
+      url: req?.url,
+      token,
+      branch: req?.branch,
+    });
+    if (req?.rememberToken && token) {
+      settingsService.saveGitToken(token);
+    }
+    return project;
   });
 
   ipcMain.handle(IPC.PROJECT_LIST, () => {
@@ -208,9 +233,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.REPORT_REVEAL_IN_FOLDER, (_, htmlReportPath: string) => {
     if (!htmlReportPath) throw new Error('No report path provided.');
     if (fs.existsSync(htmlReportPath)) {
-      shell.showItemInFolder(htmlReportPath);
+      revealInFolder(htmlReportPath);
     } else {
-      shell.openPath(path.dirname(htmlReportPath));
+      void openPath(path.dirname(htmlReportPath));
     }
     return true;
   });

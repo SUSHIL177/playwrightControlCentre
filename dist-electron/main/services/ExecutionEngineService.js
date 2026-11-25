@@ -7,16 +7,22 @@ exports.ExecutionEngineService = void 0;
 const child_process_1 = require("child_process");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const electron_1 = require("electron");
-const uuid_1 = require("uuid");
+const tenant_1 = require("../platform/tenant");
+const crypto_1 = require("crypto");
 const tree_kill_1 = __importDefault(require("tree-kill"));
 const ipcChannels_1 = require("../../shared/ipcChannels");
 const db_1 = require("../database/db");
 const pathSecurity_1 = require("../utils/pathSecurity");
 const ANSI_STRIP = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+/**
+ * Runs are tracked per tenant (web mode: one entry per end user; desktop: a single
+ * 'desktop' entry) so team members never block — or stop — each other's batches.
+ */
 class ExecutionEngineService {
-    activeProcess = null;
-    activeExecutionId = null;
+    activeRuns = new Map();
+    tenantKey() {
+        return (0, tenant_1.tenantContext)()?.userId ?? 'desktop';
+    }
     mapBatchRow(row) {
         return {
             id: row.id,
@@ -48,10 +54,10 @@ class ExecutionEngineService {
         };
     }
     isRunning() {
-        return this.activeProcess !== null;
+        return this.activeRuns.has(this.tenantKey());
     }
     getActiveExecutionId() {
-        return this.activeExecutionId;
+        return this.activeRuns.get(this.tenantKey())?.executionId ?? null;
     }
     /**
      * Lists all execution batches for a project by merging SQLite rows AND scanning the on-disk
@@ -69,12 +75,12 @@ class ExecutionEngineService {
             batchMap.set(r.id, this.mapBatchRow(r));
         }
         // Reconcile any execution folders on disk that have results.json or html-report/index.html
-        const executionsRoot = path_1.default.join(electron_1.app.getPath('userData'), 'executions');
-        if (fs_1.default.existsSync(executionsRoot)) {
-            const dirs = fs_1.default.readdirSync(executionsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+        const execRoot = (0, tenant_1.executionsRoot)();
+        if (fs_1.default.existsSync(execRoot)) {
+            const dirs = fs_1.default.readdirSync(execRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
             for (const dir of dirs) {
                 const execId = dir.name;
-                const execDir = path_1.default.join(executionsRoot, execId);
+                const execDir = path_1.default.join(execRoot, execId);
                 const htmlIndex = path_1.default.join(execDir, 'html-report', 'index.html');
                 const jsonFile = path_1.default.join(execDir, 'results.json');
                 const existing = batchMap.get(execId);
@@ -92,8 +98,14 @@ class ExecutionEngineService {
         return Array.from(batchMap.values()).sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
     }
     async startExecution(options, mainWindow, onEvent) {
-        if (this.activeProcess) {
-            throw new Error('An execution batch is already in progress. Stop it before starting a new run.');
+        const tenantKey = this.tenantKey();
+        if (this.activeRuns.has(tenantKey)) {
+            throw new Error('An execution batch is already in progress for this workspace. Stop it before starting a new run.');
+        }
+        // Hosted instances cap global concurrency so one busy suite cannot starve the box.
+        const cap = Number(process.env.PACC_MAX_CONCURRENT_RUNS || ((0, tenant_1.isWebTenant)() ? 2 : Number.MAX_SAFE_INTEGER));
+        if (Number.isFinite(cap) && this.activeRuns.size >= cap) {
+            throw new Error(`The server is at capacity (${cap} concurrent run(s)). Please retry in a few minutes.`);
         }
         const db = (0, db_1.getDb)();
         const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(options.projectId);
@@ -106,8 +118,8 @@ class ExecutionEngineService {
             .get(project.id);
         const runSeq = String(runSeqRow?.next ?? 1).padStart(4, '0');
         const nowStamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14); // yyyymmddHHMMSS
-        const executionId = `RUN-${runSeq}-${nowStamp.slice(0, 8)}-${nowStamp.slice(8)}-${(0, uuid_1.v4)().slice(0, 4).toUpperCase()}`;
-        const artifactsBase = path_1.default.join(electron_1.app.getPath('userData'), 'executions', executionId);
+        const executionId = `RUN-${runSeq}-${nowStamp.slice(0, 8)}-${nowStamp.slice(8)}-${(0, crypto_1.randomUUID)().slice(0, 4).toUpperCase()}`;
+        const artifactsBase = path_1.default.join((0, tenant_1.executionsRoot)(), executionId);
         const htmlReportDir = path_1.default.join(artifactsBase, 'html-report');
         const jsonReportFile = path_1.default.join(artifactsBase, 'results.json');
         const testOutputDir = path_1.default.join(artifactsBase, 'test-results');
@@ -212,7 +224,6 @@ class ExecutionEngineService {
         childEnv.PLAYWRIGHT_HTML_OPEN = 'never';
         childEnv.PLAYWRIGHT_JSON_OUTPUT_NAME = jsonReportFile;
         childEnv.TEST_ENV = options.environment || process.env.TEST_ENV || 'staging';
-        this.activeExecutionId = executionId;
         const capturedStdout = [];
         const emitLog = (stream, text) => {
             const payload = {
@@ -230,7 +241,7 @@ class ExecutionEngineService {
             env: childEnv,
             shell: !useDirectNode && process.platform === 'win32',
         });
-        this.activeProcess = child;
+        this.activeRuns.set(tenantKey, { child, executionId });
         let spawnErrorHandled = false;
         // A failed spawn (missing node/npx, bad cwd, EMFILE …) never emits 'close' on some platforms.
         // Surface it as a failed batch + completion event so the UI never gets stuck in "EXECUTING".
@@ -238,8 +249,9 @@ class ExecutionEngineService {
             if (spawnErrorHandled)
                 return;
             spawnErrorHandled = true;
-            this.activeProcess = null;
-            this.activeExecutionId = null;
+            const current = this.activeRuns.get(tenantKey);
+            if (current?.child === child)
+                this.activeRuns.delete(tenantKey);
             const endTime = new Date().toISOString();
             const durationMs = Math.max(0, new Date(endTime).getTime() - new Date(startTime).getTime());
             db.prepare(`UPDATE execution_batches SET status = 'failed', end_time = ?, duration_ms = ? WHERE id = ?`).run(endTime, durationMs, executionId);
@@ -259,8 +271,9 @@ class ExecutionEngineService {
         child.on('close', (code) => {
             if (spawnErrorHandled)
                 return;
-            this.activeProcess = null;
-            this.activeExecutionId = null;
+            const current = this.activeRuns.get(tenantKey);
+            if (current?.child === child)
+                this.activeRuns.delete(tenantKey);
             const completedBatch = this.finalizeExecution(executionId, project.id, project.root_path, jsonReportFile, htmlReportDir, capturedStdout.join(''), startTime, code, {
                 description,
                 mode: options.mode,
@@ -268,16 +281,17 @@ class ExecutionEngineService {
                 browsers,
                 tag: options.tag,
             });
-            emitLog('system', `\n[Control Center] Execution ${executionId} completed: ${completedBatch.passed} passed, ${completedBatch.failed} failed, ${completedBatch.skipped} skipped (${(completedBatch.durationMs / 1000).toFixed(1)}s).\n`);
+            emitLog('system', `\n[Control Center] Execution ${executionId} completed: ${completedBatch.passed} passed, ${completedBatch.failed} failed, ${completedBatch.skipped} skipped (${(completedBatch.durationMs / 60000).toFixed(1)} min).\n`);
             mainWindow?.webContents.send(ipcChannels_1.IPC.EXEC_COMPLETED_EVENT, completedBatch);
             onEvent?.(ipcChannels_1.IPC.EXEC_COMPLETED_EVENT, completedBatch);
         });
         return batch;
     }
     stopExecution() {
-        if (!this.activeProcess || !this.activeProcess.pid)
+        const run = this.activeRuns.get(this.tenantKey());
+        if (!run?.child?.pid)
             return false;
-        (0, tree_kill_1.default)(this.activeProcess.pid, 'SIGTERM');
+        (0, tree_kill_1.default)(run.child.pid, 'SIGTERM');
         return true;
     }
     finalizeExecution(executionId, projectId, projectRoot, jsonReportFile, htmlReportDir, rawStdout, startTimeIso, exitCode, originals) {
@@ -367,7 +381,7 @@ class ExecutionEngineService {
                             const testId = Buffer.from(uniqueKey).toString('base64url');
                             const totalTestDuration = attempts.reduce((acc, a) => acc + (a.duration || 0), 0);
                             results.push({
-                                id: (0, uuid_1.v4)(),
+                                id: (0, crypto_1.randomUUID)(),
                                 executionId,
                                 projectId,
                                 testId,
@@ -431,7 +445,7 @@ class ExecutionEngineService {
                 const folderPath = path_1.default.dirname(relFile);
                 const uniqueKey = `${relFile}::::${testTitle}`;
                 results.push({
-                    id: (0, uuid_1.v4)(),
+                    id: (0, crypto_1.randomUUID)(),
                     executionId,
                     projectId,
                     testId: Buffer.from(uniqueKey).toString('base64url'),
