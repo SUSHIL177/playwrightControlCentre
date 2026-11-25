@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   LayoutDashboard,
   FolderGit2,
@@ -18,6 +18,8 @@ import {
   Settings,
   Users,
   LogOut,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react';
 import { NavRoute } from '@shared/types';
 
@@ -68,6 +70,8 @@ const badgeStyles = (id: NavRoute): string =>
     ? 'bg-amber-500/20 text-amber-300'
     : 'bg-sky-500/20 text-sky-300';
 
+const STORAGE_KEY = 'pacc.sidebar.collapsed';
+
 export const Sidebar: React.FC<SidebarProps> = ({
   activeRoute,
   onSelectRoute,
@@ -79,14 +83,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
   username = null,
   onSignOut,
 }) => {
+  // Desktop icon-rail vs full width — user-controlled, persisted. Mobile is always icon-rail.
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(STORAGE_KEY, next ? '1' : '0');
+      } catch {
+        /* storage unavailable — keep in-memory state */
+      }
+      return next;
+    });
+  };
+
   const items = NAV_ITEMS.filter((item) => item.id !== 'team' || (webMode && isAdmin));
+  const labelCls = collapsed ? 'hidden' : 'hidden md:inline';
+  const badgeCls = collapsed ? 'hidden' : 'hidden md:inline-block';
+  const rowCls = collapsed ? 'justify-center' : 'justify-center md:justify-between';
+
   return (
-    <aside className="w-14 md:w-64 shrink-0 bg-pw-slate border-r border-pw-border flex flex-col h-full select-none transition-all duration-200">
-      <div className="h-14 px-2 md:px-4 flex items-center gap-3 border-b border-pw-border justify-center md:justify-start">
+    <aside
+      className={`${
+        collapsed ? 'w-14' : 'w-14 md:w-64'
+      } shrink-0 bg-pw-slate border-r border-pw-border flex flex-col h-full select-none transition-all duration-200`}
+    >
+      <div
+        className={`h-14 px-2 flex items-center gap-3 border-b border-pw-border ${
+          collapsed ? 'justify-center' : 'justify-center md:justify-start md:px-4'
+        }`}
+      >
         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-sky-500 flex items-center justify-center font-bold text-slate-950 text-sm shadow shrink-0">
           PW
         </div>
-        <div className="leading-tight hidden md:block">
+        <div className={`leading-tight ${collapsed ? 'hidden' : 'hidden md:block'}`}>
           <div className="font-semibold text-sm text-white tracking-tight">Playwright</div>
           <div className="text-[11px] text-sky-400 font-medium">Control Center</div>
         </div>
@@ -103,7 +139,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               onClick={() => onSelectRoute(item.id)}
               title={item.label}
               aria-label={item.label}
-              className={`w-full flex items-center justify-center md:justify-between px-2 md:px-3 py-2 rounded-md text-xs font-medium transition-colors ${
+              aria-current={active ? 'page' : undefined}
+              className={`w-full flex items-center ${rowCls} px-2 md:px-3 py-2 rounded-md text-xs font-medium transition-colors ${
                 active
                   ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30'
                   : 'text-slate-400 border border-transparent hover:text-slate-100 hover:bg-slate-800/70'
@@ -111,12 +148,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <span className="flex items-center gap-2.5 truncate justify-center md:justify-start">
                 <Icon className={`w-4 h-4 shrink-0 ${active ? 'text-sky-400' : 'text-slate-400'}`} />
-                <span className="truncate hidden md:inline">{item.label}</span>
+                <span className={`truncate ${labelCls}`}>{item.label}</span>
               </span>
               {count !== null && count > 0 && (
-                <span
-                  className={`hidden md:inline-block px-1.5 py-0.5 text-[10px] rounded-full font-semibold ${badgeStyles(item.id)}`}
-                >
+                <span className={`${badgeCls} px-1.5 py-0.5 text-[10px] rounded-full font-semibold ${badgeStyles(item.id)}`}>
                   {count}
                 </span>
               )}
@@ -125,30 +160,59 @@ export const Sidebar: React.FC<SidebarProps> = ({
         })}
       </nav>
 
+      {/* Collapse / expand toggle */}
+      <div className="border-t border-pw-border p-2 shrink-0">
+        <button
+          onClick={toggleCollapsed}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
+          className={`w-full flex items-center gap-2.5 px-2 md:px-3 py-2 rounded-md text-xs font-medium text-slate-400 hover:text-slate-100 hover:bg-slate-800/70 transition-colors ${
+            collapsed ? 'justify-center' : 'justify-center md:justify-start'
+          }`}
+        >
+          {collapsed ? <ChevronsRight className="w-4 h-4 shrink-0" /> : <ChevronsLeft className="w-4 h-4 shrink-0" />}
+          <span className={`truncate ${labelCls}`}>{collapsed ? 'Expand' : 'Collapse'}</span>
+        </button>
+      </div>
+
       {webMode && (
         <div className="border-t border-pw-border p-2 md:p-3 shrink-0">
-          <div className="hidden md:flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">Signed in</div>
-              <div className="text-xs font-semibold text-slate-200 truncate">{username || '…'}</div>
-            </div>
+          {collapsed ? (
             <button
               onClick={onSignOut}
               title="Sign out"
               aria-label="Sign out"
-              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+              className="w-full p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white flex justify-center"
             >
               <LogOut className="w-4 h-4" />
             </button>
-          </div>
-          <button
-            onClick={onSignOut}
-            title="Sign out"
-            aria-label="Sign out"
-            className="md:hidden w-full p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white flex justify-center"
-          >
-            <LogOut className="w-4 h-4" />
-          </button>
+          ) : (
+            <>
+              <div className="hidden md:flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">Signed in</div>
+                  <div className="text-xs font-semibold text-slate-200 truncate">{username || '…'}</div>
+                </div>
+                <button
+                  onClick={onSignOut}
+                  title="Sign out"
+                  aria-label="Sign out"
+                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+              <button
+                onClick={onSignOut}
+                title="Sign out"
+                aria-label="Sign out"
+                className="md:hidden w-full p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white flex justify-center"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </>
+          )}
         </div>
       )}
     </aside>

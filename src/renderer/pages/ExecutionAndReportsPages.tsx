@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
-import { Play, RotateCcw } from 'lucide-react';
+import { Play, RotateCcw, Square } from 'lucide-react';
 import { BrowserType, ExecutionBatch, ProjectConfig } from '@shared/types';
 
 export const ExecutionCenterPage: React.FC<{
   project: ProjectConfig | null;
   batches: ExecutionBatch[];
   onStartExecution: (opts: any) => void;
-}> = ({ project, batches, onStartExecution }) => {
+  /** True while a batch is running for this workspace — enables the Stop button. */
+  isRunning?: boolean;
+  onStopExecution?: () => void;
+}> = ({ project, batches, onStartExecution, isRunning = false, onStopExecution }) => {
   const [browsers, setBrowsers] = useState<BrowserType[]>(['chromium']);
   const [headed, setHeaded] = useState(false);
   const [workers, setWorkers] = useState(4);
@@ -28,6 +31,19 @@ export const ExecutionCenterPage: React.FC<{
             Runtime overrides apply strictly to this process without mutating your original playwright.config.ts.
           </p>
         </div>
+
+        {isRunning && (
+          <button
+            onClick={() => {
+              if (!window.confirm('Stop the running batch? Tests that already finished will be kept.')) return;
+              onStopExecution?.();
+            }}
+            className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold flex items-center gap-2"
+            title="SIGTERM to the Playwright process — partial results are finalized and kept"
+          >
+            <Square className="w-4 h-4 fill-current" /> Stop Running Batch
+          </button>
+        )}
 
         {latestFailedBatch && (
           <button

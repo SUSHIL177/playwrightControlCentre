@@ -167,6 +167,7 @@ console.error = (...args) => { if (!String(args[0]).includes('Warning')) process
 const healingProgressCbs = new Set();
 const executionCompletedCbs = new Set();
 const previewCalls = [];
+const startExecutionCalls = [];
 const mock = {
   browseDirectory: async () => '/fixture',
   importProject: async () => null,
@@ -177,7 +178,7 @@ const mock = {
   listTests: async () => [],
   startWatchingTests: async () => true,
   onTestsChanged: () => () => {},
-  startExecution: async () => ({ executionId: BATCH.id }),
+  startExecution: async (opts) => { startExecutionCalls.push(opts); return { executionId: BATCH.id }; },
   stopExecution: async () => undefined,
   getActiveExecutionStatus: async () => ({ running: false }),
   onTerminalLog: () => () => {},
@@ -243,6 +244,7 @@ const click = (el) => {
   const ev = new window.MouseEvent('click', { bubbles: true, cancelable: true });
   el.dispatchEvent(ev);
 };
+const isRunningFlag = () => /EXECUTING/.test(bodyText());
 const findButton = (text) => [...window.document.querySelectorAll('button')].find((b) => (b.textContent || '').includes(text));
 const tick = () => new Promise((r) => setTimeout(r, 50));
 const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { await tick(); } };
@@ -254,6 +256,42 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
   check('Dashboard mounts by default', /Execution Trend|Dashboard/i.test(bodyText()));
   check('Dashboard formats RUN-0007 batch as Run #7', bodyText().includes('Run #7'));
   check('failure-category chart renders', /Failure Category|Locator/i.test(bodyText()));
+  check('KPI flip cards render LATEST/ALL TIME faces', bodyText().includes('LATEST') && bodyText().includes('ALL TIME'));
+  check('Weekly Analytics panel renders with range presets', bodyText().includes('Weekly Analytics') && ['2W', '4W', '8W', '12W'].every((t) => bodyText().includes(t)));
+  check('Weekly table lists week rows', /Week\s*Runs\s*Executed\s*Passed/i.test(bodyText()));
+
+  // Run Full Regression → workers modal instead of hardcoded 4
+  const quickRunBtn = findButton('Run Full Regression');
+  check('Run Full Regression button present', !!quickRunBtn);
+  if (quickRunBtn) {
+    click(quickRunBtn);
+    await flush(200);
+    check('workers modal opens on quick run', /Parallel workers/i.test(bodyText()));
+    const eightBtn = [...window.document.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '8');
+    if (eightBtn) { click(eightBtn); await flush(150); }
+    const startBtn = findButton('Start Regression Run');
+    check('confirm button reflects chosen worker count', !!startBtn && /\(8 workers\)/.test(startBtn.textContent || ''));
+    if (startBtn) { click(startBtn); await flush(200); }
+    check('batch launches with the selected workers (not a hardcoded 4)', startExecutionCalls.length > 0 && startExecutionCalls[startExecutionCalls.length - 1].workers === 8);
+  }
+
+  // Sidebar collapse / expand toggle
+  const aside = window.document.querySelector('aside');
+  const collapseBtn = window.document.querySelector('button[aria-label="Collapse sidebar"]');
+  check('sidebar collapse toggle present', !!collapseBtn);
+  if (aside && collapseBtn) {
+    const expandedCls = aside.className;
+    click(collapseBtn);
+    await flush(150);
+    check('sidebar collapses to icon rail', !window.document.querySelector('aside').className.includes('md:w-64'));
+    const expandBtn = window.document.querySelector('button[aria-label="Expand sidebar"]');
+    check('expand toggle appears after collapse', !!expandBtn);
+    if (expandBtn) { click(expandBtn); await flush(150); }
+    check('sidebar expands back to full width', window.document.querySelector('aside').className.includes('md:w-64') === expandedCls.includes('md:w-64'));
+
+  // A batch is now "running" in this session (quick run above) — stop controls must be visible
+  check('header/terminal Stop control appears while running', !!findButton('Stop'));
+  }
 
   const nav = (label) => {
     const btn = [...window.document.querySelectorAll('button, a, [role="button"]')].find((b) => (b.textContent || '').trim().startsWith(label));
@@ -321,6 +359,9 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
     let ok = true;
     try { nav(label); await flush(); ok = marker.test(bodyText()); } catch { ok = false; }
     check(`${label} mounts`, ok);
+    if (label === 'Execution Center' && isRunningFlag()) {
+      check('Execution Center shows Stop Running Batch while running', bodyText().includes('Stop Running Batch'));
+    }
   }
 
   const failed = results.filter(([, ok]) => !ok);
