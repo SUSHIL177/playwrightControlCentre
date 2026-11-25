@@ -1,8 +1,9 @@
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { app, BrowserWindow } from 'electron';
-import { v4 as uuidv4 } from 'uuid';
+import type { BrowserWindow } from 'electron';
+import { executionsRoot, isWebTenant, tenantContext } from '../platform/tenant';
+import { randomUUID as uuidv4 } from 'crypto';
 import treeKill from 'tree-kill';
 import {
   BrowserType,
@@ -17,9 +18,21 @@ import { ensureDirSync } from '../utils/pathSecurity';
 
 const ANSI_STRIP = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
+interface ActiveRun {
+  child: ChildProcess;
+  executionId: string;
+}
+
+/**
+ * Runs are tracked per tenant (web mode: one entry per end user; desktop: a single
+ * 'desktop' entry) so team members never block — or stop — each other's batches.
+ */
 export class ExecutionEngineService {
-  private activeProcess: ChildProcess | null = null;
-  private activeExecutionId: string | null = null;
+  private activeRuns = new Map<string, ActiveRun>();
+
+  private tenantKey(): string {
+    return tenantContext()?.userId ?? 'desktop';
+  }
 
   private mapBatchRow(row: any): ExecutionBatch {
     return {
@@ -52,11 +65,11 @@ export class ExecutionEngineService {
   }
 
   isRunning(): boolean {
-    return this.activeProcess !== null;
+    return this.activeRuns.has(this.tenantKey());
   }
 
   getActiveExecutionId(): string | null {
-    return this.activeExecutionId;
+    return this.activeRuns.get(this.tenantKey())?.executionId ?? null;
   }
 
   /**
@@ -77,12 +90,12 @@ export class ExecutionEngineService {
     }
 
     // Reconcile any execution folders on disk that have results.json or html-report/index.html
-    const executionsRoot = path.join(app.getPath('userData'), 'executions');
-    if (fs.existsSync(executionsRoot)) {
-      const dirs = fs.readdirSync(executionsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+    const execRoot = executionsRoot();
+    if (fs.existsSync(execRoot)) {
+      const dirs = fs.readdirSync(execRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
       for (const dir of dirs) {
         const execId = dir.name;
-        const execDir = path.join(executionsRoot, execId);
+        const execDir = path.join(execRoot, execId);
         const htmlIndex = path.join(execDir, 'html-report', 'index.html');
         const jsonFile = path.join(execDir, 'results.json');
         const existing = batchMap.get(execId);
@@ -120,8 +133,14 @@ export class ExecutionEngineService {
     mainWindow: BrowserWindow | null,
     onEvent?: (channel: string, payload: any) => void
   ): Promise<ExecutionBatch> {
-    if (this.activeProcess) {
-      throw new Error('An execution batch is already in progress. Stop it before starting a new run.');
+    const tenantKey = this.tenantKey();
+    if (this.activeRuns.has(tenantKey)) {
+      throw new Error('An execution batch is already in progress for this workspace. Stop it before starting a new run.');
+    }
+    // Hosted instances cap global concurrency so one busy suite cannot starve the box.
+    const cap = Number(process.env.PACC_MAX_CONCURRENT_RUNS || (isWebTenant() ? 2 : Number.MAX_SAFE_INTEGER));
+    if (Number.isFinite(cap) && this.activeRuns.size >= cap) {
+      throw new Error(`The server is at capacity (${cap} concurrent run(s)). Please retry in a few minutes.`);
     }
 
     const db = getDb();
@@ -136,7 +155,7 @@ export class ExecutionEngineService {
     const runSeq = String(runSeqRow?.next ?? 1).padStart(4, '0');
     const nowStamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14); // yyyymmddHHMMSS
     const executionId = `RUN-${runSeq}-${nowStamp.slice(0, 8)}-${nowStamp.slice(8)}-${uuidv4().slice(0, 4).toUpperCase()}`;
-    const artifactsBase = path.join(app.getPath('userData'), 'executions', executionId);
+    const artifactsBase = path.join(executionsRoot(), executionId);
     const htmlReportDir = path.join(artifactsBase, 'html-report');
     const jsonReportFile = path.join(artifactsBase, 'results.json');
     const testOutputDir = path.join(artifactsBase, 'test-results');
@@ -261,7 +280,6 @@ export class ExecutionEngineService {
     childEnv.PLAYWRIGHT_JSON_OUTPUT_NAME = jsonReportFile;
     childEnv.TEST_ENV = options.environment || process.env.TEST_ENV || 'staging';
 
-    this.activeExecutionId = executionId;
     const capturedStdout: string[] = [];
 
     const emitLog = (stream: 'stdout' | 'stderr' | 'system', text: string) => {
@@ -283,7 +301,7 @@ export class ExecutionEngineService {
       shell: !useDirectNode && process.platform === 'win32',
     });
 
-    this.activeProcess = child;
+    this.activeRuns.set(tenantKey, { child, executionId });
     let spawnErrorHandled = false;
 
     // A failed spawn (missing node/npx, bad cwd, EMFILE …) never emits 'close' on some platforms.
@@ -291,8 +309,8 @@ export class ExecutionEngineService {
     child.on('error', (spawnErr) => {
       if (spawnErrorHandled) return;
       spawnErrorHandled = true;
-      this.activeProcess = null;
-      this.activeExecutionId = null;
+      const current = this.activeRuns.get(tenantKey);
+      if (current?.child === child) this.activeRuns.delete(tenantKey);
 
       const endTime = new Date().toISOString();
       const durationMs = Math.max(0, new Date(endTime).getTime() - new Date(startTime).getTime());
@@ -321,8 +339,8 @@ export class ExecutionEngineService {
 
     child.on('close', (code) => {
       if (spawnErrorHandled) return;
-      this.activeProcess = null;
-      this.activeExecutionId = null;
+      const current = this.activeRuns.get(tenantKey);
+      if (current?.child === child) this.activeRuns.delete(tenantKey);
 
       const completedBatch = this.finalizeExecution(
         executionId,
@@ -344,7 +362,7 @@ export class ExecutionEngineService {
 
       emitLog(
         'system',
-        `\n[Control Center] Execution ${executionId} completed: ${completedBatch.passed} passed, ${completedBatch.failed} failed, ${completedBatch.skipped} skipped (${(completedBatch.durationMs / 1000).toFixed(1)}s).\n`
+        `\n[Control Center] Execution ${executionId} completed: ${completedBatch.passed} passed, ${completedBatch.failed} failed, ${completedBatch.skipped} skipped (${(completedBatch.durationMs / 60000).toFixed(1)} min).\n`
       );
       mainWindow?.webContents.send(IPC.EXEC_COMPLETED_EVENT, completedBatch);
       onEvent?.(IPC.EXEC_COMPLETED_EVENT, completedBatch);
@@ -354,8 +372,9 @@ export class ExecutionEngineService {
   }
 
   stopExecution(): boolean {
-    if (!this.activeProcess || !this.activeProcess.pid) return false;
-    treeKill(this.activeProcess.pid, 'SIGTERM');
+    const run = this.activeRuns.get(this.tenantKey());
+    if (!run?.child?.pid) return false;
+    treeKill(run.child.pid, 'SIGTERM');
     return true;
   }
 

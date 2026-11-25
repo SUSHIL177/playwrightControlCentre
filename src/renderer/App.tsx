@@ -10,6 +10,8 @@ import {
   TerminalLogChunk,
 } from '@shared/types';
 import { Sidebar } from './components/Sidebar';
+import { TeamPage } from './pages/TeamPage';
+import { fetchCapabilities, DESKTOP_CAPS, type WebCapabilities } from './webMode';
 import { LiveTerminalPanel } from './components/LiveTerminalPanel';
 import { DashboardPage } from './pages/DashboardPage';
 import { ProjectConfigPage } from './pages/ProjectConfigPage';
@@ -31,6 +33,7 @@ async function safeInvoke<T>(label: string, promise: Promise<T>, fallback: T): P
 }
 
 export default function App() {
+  const [caps, setCaps] = useState<WebCapabilities>(DESKTOP_CAPS);
   const [route, setRoute] = useState<NavRoute>('dashboard');
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectConfig | null>(null);
@@ -42,6 +45,19 @@ export default function App() {
   const [logs, setLogs] = useState<TerminalLogChunk[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [executionVersion, setExecutionVersion] = useState(0);
+
+  useEffect(() => {
+    fetchCapabilities().then(setCaps).catch(() => undefined);
+  }, []);
+
+  const handleSignOut = useCallback(async () => {
+    try {
+      await fetch('/api/logout', { method: 'POST', headers: { 'x-pacc-web': '1' }, credentials: 'same-origin' });
+    } catch {
+      // still redirect — the cookie may already be gone
+    }
+    window.location.assign('/login');
+  }, []);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -162,6 +178,10 @@ export default function App() {
         failureCount={failures.length}
         proposalCount={proposals.filter((p) => p.status === 'pending').length}
         reportCount={batches.length}
+        webMode={caps.webMode}
+        isAdmin={caps.role === 'admin'}
+        username={caps.username}
+        onSignOut={handleSignOut}
       />
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -333,6 +353,7 @@ export default function App() {
           {route === 'artifacts' && <ArtifactsPage project={activeProject} refreshKey={executionVersion} />}
 
           {route === 'settings' && <SettingsPage />}
+          {route === 'team' && <TeamPage />}
         </main>
 
         {route !== 'terminal' && (

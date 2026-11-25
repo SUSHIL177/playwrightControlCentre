@@ -17,6 +17,7 @@ import {
 import { Play, AlertTriangle, CheckCircle2, Clock, Activity, ExternalLink, RefreshCw, Loader2 } from 'lucide-react';
 import { DiscoveredTest, ExecutionBatch, FailureAnalysisRecord, ProjectConfig } from '@shared/types';
 import { batchAxisLabel, batchShortLabel } from '../utils/batchFormat';
+import { toMinutes } from '@shared/format';
 interface DashboardPageProps {
   project: ProjectConfig | null;
   tests: DiscoveredTest[];
@@ -68,10 +69,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   const totalSkipped = batches.reduce((s, b) => s + b.skipped, 0);
   const totalFlaky = batches.reduce((s, b) => s + b.flaky, 0);
   const passRate = totalExecuted > 0 ? Math.round((totalPassed / totalExecuted) * 100) : 0;
-  const avgDurationSec =
+  const avgDurationMin =
     batches.length > 0
-      ? (batches.reduce((s, b) => s + b.durationMs, 0) / batches.length / 1000).toFixed(1)
-      : '0.0';
+      ? toMinutes(batches.reduce((s, b) => s + b.durationMs, 0) / batches.length)
+      : 0;
 
   const donutData = [
     { name: 'Passed', value: latest?.passed || 0, color: '#10B981' },
@@ -89,7 +90,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       passed: b.passed,
       failed: b.failed,
       skipped: b.skipped,
-      durationSec: Number((b.durationMs / 1000).toFixed(1)),
+      durationMin: toMinutes(b.durationMs),
     }));
 
   const categoryCounts = failures.reduce<Record<string, number>>((acc, f) => {
@@ -169,7 +170,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         <KpiCard label="Total Failed" value={totalFailed} icon={<AlertTriangle className="w-4 h-4 text-rose-400" />} />
         <KpiCard label="Pass Rate" value={`${passRate}%`} icon={<Activity className="w-4 h-4 text-emerald-400" />} />
         <KpiCard label="Flaky / Skipped" value={`${totalFlaky} / ${totalSkipped}`} icon={<Activity className="w-4 h-4 text-amber-400" />} />
-        <KpiCard label="Avg Duration" value={`${avgDurationSec}s`} icon={<Clock className="w-4 h-4 text-indigo-400" />} />
+        <KpiCard label="Avg Duration" value={`${avgDurationMin} min`} icon={<Clock className="w-4 h-4 text-indigo-400" />} />
       </div>
 
       {batches.length === 0 ? (

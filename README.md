@@ -1,4 +1,33 @@
-# Playwright Automation Control Center v1.4.1
+# Playwright Automation Control Center v1.5.0
+
+**Desktop app unchanged. Now also a hosted multi-user web app** — one instance, your whole team signs in,
+everyone gets a private workspace (own imported projects, run history, settings, API keys, artifacts).
+
+## What's New in v1.5.0 (hosted team web mode + Git import + latest stack + minutes everywhere)
+
+1. **Hosted multi-user web mode (`src/server/webServer.ts`)**: `npm run build && PACC_PORT=8080 PACC_DATA_DIR=/srv/pacc-data npm run start:web` serves the full Control Center to a team from one server. Built-in account system (username + password, scrypt-hashed) — the first run creates the **admin** account at `/setup`, then the admin creates teammates under **Team Access** in the sidebar (members can't self-register). 14-day HttpOnly session cookies, per-IP+username login throttling (5 fails → 10 min lockout), strict `x-pacc-web` + Origin checks on every POST, CSP/`X-Frame-Options: DENY`/`Referrer-Policy: no-referrer` headers, and a per-user SSE channel so each user only ever receives their own run events.
+2. **Complete data isolation (`src/main/platform/tenant.ts`, `src/main/database/db.ts`)**: every user gets `<PACC_DATA_DIR>/users/<id>/` (mode `0700`) holding their own `data/playwright_control_center.sqlite`, `executions/` (archived reports, traces, videos), and `repos/` (Git clones). All 35+ service `getDb()` call sites resolve to the caller's database via AsyncLocalStorage tenant context — no query ever crosses tenants. The shared `hub.sqlite` stores accounts and sessions only. Scheduled jobs registered at boot (and at save time) are bound to their tenant, so cron runs fire with the right workspace.
+3. **Import from Git (`ProjectDiscoveryService.importProjectFromGit`, `ProjectConfigPage.tsx`)**: HTTPS personal-access-token clone (GitHub / GitLab / Azure DevOps) — paste URL + token (+ optional branch), pacc does a shallow (`--depth 1`) authenticated clone into your workspace via a one-shot `git -c http.extraHeader=Authorization: Basic …` (username `oauth2` for GitLab hosts, `x-access-token` otherwise; `GIT_TERMINAL_PROMPT=0`), then auto-discovers framework config + tests like any local import. The token is never written into the remote URL, never logged (raw and base64 forms are scrubbed from error messages), and is used exactly once — or you tick **Remember token** to store it AES-256-GCM-encrypted (`PACC_SECRET` or a generated key under the data root) and reuse it. Repos cloned by pacc are git-ignored from containment checks: nothing outside your workspace is readable.
+4. **Web-mode UI adaptations**: native OS dialogs and shell actions are hidden/replaced (Browse Folder, Reveal in folder, "Run Headed" — headed runs only make sense on a desktop with a display); archived HTML reports are served at authenticated same-origin `/reports/<batch>/index.html`; artifacts open/download at `/artifacts-file/…` (paths validated inside your project root); "Share" opens the report URL. A **Team Access** admin page adds/resets/deletes team accounts (delete wipes that user's workspace too — nothing lingers). Sign out lives in the sidebar footer. The Electron desktop app is untouched: same userData location, same headed runs, same native dialogs.
+5. **Concurrency & safety on the server**: per-tenant single active run (as before), plus a global cap `PACC_MAX_CONCURRENT_RUNS` (default **2** on hosted instances, unlimited desktop) with a friendly "server at capacity" error; 1 MB request bodies; 20 SSE streams max per user; artifact/report paths are containment-checked; `/api/capabilities` advertises web/desktop so the SPA degrades gracefully.
+6. **Latest stack (majors, Tailwind kept at 3.4.15)**: React 19, Vite 8, TypeScript 7, Electron 45, recharts 3.11, node-cron 4.6; uuid removed (built-in `crypto.randomUUID`). **Durations display as minutes everywhere** (`src/shared/format.ts`), including CSVs (`Duration (min)`).
+
+## Hosted web mode — quick start
+
+```bash
+npm ci && npm run build
+PACC_PORT=8080 PACC_DATA_DIR=/srv/pacc-data npm run start:web
+```
+
+Then open `http://<server>:8080` → `/setup` creates the first **admin** account → Admin → **Team Access** creates member accounts. Put it behind TLS (reverse proxy or set `PACC_SECURE_COOKIES=1` once HTTPS is on). The server host needs Node 20+, `git`, and the Playwright browsers (`npx playwright install` on the host) — test execution happens on the server, headless.
+
+Environment variables: `PACC_PORT` (default 8080), `PACC_HOST` (default 0.0.0.0), `PACC_DATA_DIR` (default `~/.pacc`), `PACC_MAX_CONCURRENT_RUNS` (default 2 hosted), `PACC_SECRET` (AES-GCM key for saved Git tokens; auto-generated otherwise), `PACC_SECURE_COOKIES=1`.
+
+Notes & limits: Headed browser runs are desktop-only by definition on a server; local-path import is limited to the caller's own cloned workspace (use Git import); each user's Playwright suite still needs its dependencies installed where pacc cloned it (pacc does not run `npm install` on remote repos for you); report "sharing" is the authenticated `/reports/…` URL, not a LAN port.
+
+Verification (all passing): `npm run typecheck`, `npm run build`, `node scripts/verify/healing-e2e.js` (6/6), `node scripts/verify/ui-smoke.js` (30/30 checks), plus a scripted HTTP smoke of the hosted mode: `/setup` bootstrap, admin → member creation, member 403 on admin endpoints, login throttling, SPA + asset serving, authenticated `/reports` traversal guard, per-user tenant databases, logout/session invalidation.
+
+## What's New in v1.4.1 (AI-driven repair, self-correction, fresh artifact previews)
 
 ## What's New in v1.4.1 (AI-driven repair, self-correction, fresh artifact previews)
 

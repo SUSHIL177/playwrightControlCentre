@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ArtifactCatalogService = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const electron_1 = require("electron");
+const runtime_1 = require("../platform/runtime");
 const db_1 = require("../database/db");
 const pathSecurity_1 = require("../utils/pathSecurity");
 const EXCLUDED_DIRS = new Set([
@@ -171,13 +171,43 @@ class ArtifactCatalogService {
     openArtifact(projectId, relativePath) {
         const abs = this.resolveWithinProject(projectId, relativePath);
         // Fire-and-forget: the OS picks the handler; surface synchronous validation errors only.
-        void electron_1.shell.openPath(abs);
+        (0, runtime_1.openPath)(abs);
         return true;
     }
     revealArtifact(projectId, relativePath) {
         const abs = this.resolveWithinProject(projectId, relativePath);
-        electron_1.shell.showItemInFolder(abs);
+        (0, runtime_1.revealInFolder)(abs);
         return true;
+    }
+    /**
+     * Resolve an artifact to its absolute path + mime for download serving (web mode).
+     * Same root-containment guard as previews — callers must never see a path outside the project.
+     */
+    getArtifactFile(projectId, relativePath) {
+        const abs = this.resolveWithinProject(projectId, relativePath);
+        const stat = fs_1.default.statSync(abs);
+        if (!stat.isFile())
+            throw new Error('Not a file.');
+        if (stat.size > SKIP_FILE_BYTES)
+            throw new Error('File is larger than 250 MB.');
+        const ext = path_1.default.extname(abs).replace(/^\./, '').toLowerCase();
+        const mime = MIME_BY_EXT[ext] ||
+            (TEXT_EXTS.has(ext)
+                ? 'text/plain; charset=utf-8'
+                : ext === 'pdf'
+                    ? 'application/pdf'
+                    : VIDEO_EXTS.has(ext)
+                        ? `video/${ext === 'mov' ? 'quicktime' : ext}`
+                        : ARCHIVE_EXTS.has(ext)
+                            ? 'application/octet-stream'
+                            : 'application/octet-stream');
+        return {
+            relativePath: relativePath.replace(/\\/g, '/'),
+            name: path_1.default.basename(abs),
+            absolutePath: abs,
+            sizeBytes: stat.size,
+            mime,
+        };
     }
     resolveWithinProject(projectId, relativePath) {
         const db = (0, db_1.getDb)();

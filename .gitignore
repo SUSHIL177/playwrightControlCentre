@@ -13,3 +13,9 @@ release/
 
 # In-repo verification harness build artifacts
 scripts/verify/.ui-smoke-*
+
+# Hosted-mode local data (if PACC_DATA_DIR is pointed inside the repo)
+.pacc/
+*.sqlite
+*.sqlite-*
+hub.sqlite

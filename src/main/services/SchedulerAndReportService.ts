@@ -2,8 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import http from 'http';
 import cron, { ScheduledTask } from 'node-cron';
-import { v4 as uuidv4 } from 'uuid';
-import { BrowserWindow, shell } from 'electron';
+import { randomUUID as uuidv4 } from 'crypto';
+import type { BrowserWindow } from 'electron';
+import { openPath } from '../platform/runtime';
+import { runWithTenant, tenantContext, type TenantContext } from '../platform/tenant';
 import { ScheduleConfig } from '../../shared/types';
 import { getDb } from '../database/db';
 import { ExecutionEngineService } from './ExecutionEngineService';
@@ -22,6 +24,39 @@ export class SchedulerAndReportService {
         this.registerCronJob(sched, getMainWindow);
       }
     }
+  }
+
+  /**
+   * Hosted mode: register one tenant's persisted schedules out-of-band. The cron
+   * callback executes with the tenant bound so runs land in that user's workspace.
+   */
+  initPersistedSchedulesForTenant(ctx: TenantContext, db: import('../database/db').PersistentSqliteDB, getMainWindow: () => BrowserWindow | null): void {
+    runWithTenant(ctx, () => {
+      const rows = db.prepare('SELECT * FROM schedules WHERE enabled = 1').all() as any[];
+      for (const r of rows) {
+        this.registerCronJob(
+          {
+            id: r.id,
+            projectId: r.project_id,
+            name: r.name,
+            cronExpression: r.cron_expression,
+            frequencyLabel: r.frequency_label,
+            environment: r.environment,
+            browsers: JSON.parse(r.browsers || '["chromium"]'),
+            mode: r.mode,
+            tag: r.tag || undefined,
+            workers: r.workers,
+            headed: Boolean(r.headed),
+            enabled: true,
+            lastRunAt: r.last_run_at || undefined,
+            nextRunAt: r.next_run_at || undefined,
+            webhookUrl: r.webhook_url || undefined,
+            notifyEmail: r.notify_email || undefined,
+          },
+          getMainWindow
+        );
+      }
+    });
   }
 
   saveSchedule(config: Omit<ScheduleConfig, 'id'> & { id?: string }, getMainWindow: () => BrowserWindow | null): ScheduleConfig {
@@ -105,7 +140,15 @@ export class SchedulerAndReportService {
   }
 
   private registerCronJob(sched: ScheduleConfig, getMainWindow: () => BrowserWindow | null): void {
+    const capturedTenant = tenantContext(); // undefined for the desktop app
     const task = cron.schedule(sched.cronExpression, async () => {
+      if (capturedTenant) return runWithTenant(capturedTenant, () => this.runScheduledJob(sched, getMainWindow));
+      return this.runScheduledJob(sched, getMainWindow);
+    });
+    this.tasks.set(sched.id, task);
+  }
+
+  private async runScheduledJob(sched: ScheduleConfig, getMainWindow: () => BrowserWindow | null): Promise<void> {
       if (this.executionEngine.isRunning()) {
         return;
       }
@@ -139,9 +182,6 @@ export class SchedulerAndReportService {
       } catch {
         // Logged via execution engine
       }
-    });
-
-    this.tasks.set(sched.id, task);
   }
 
   private unregisterCronJob(id: string): void {
@@ -156,7 +196,7 @@ export class SchedulerAndReportService {
     if (!fs.existsSync(htmlReportPath)) {
       throw new Error(`Native Playwright HTML report not found at ${htmlReportPath}`);
     }
-    shell.openPath(htmlReportPath);
+    openPath(htmlReportPath);
   }
 
   hostReportDirectory(reportDir: string): string {

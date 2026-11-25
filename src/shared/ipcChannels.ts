@@ -1,6 +1,7 @@
 export const IPC = {
   PROJECT_BROWSE_DIR: 'project:browse-dir',
   PROJECT_IMPORT: 'project:import',
+  PROJECT_IMPORT_FROM_GIT: 'project:import-from-git',
   PROJECT_LIST: 'project:list',
   PROJECT_DELETE: 'project:delete',
   PROJECT_RESCAN: 'project:rescan',
@@ -58,4 +59,5 @@ export const IPC = {
   SETTINGS_GET: 'settings:get',
   SETTINGS_SAVE: 'settings:save',
   SETTINGS_SAVE_API_KEY: 'settings:save-api-key',
+  SETTINGS_HAS_GIT_TOKEN: 'settings:has-git-token',
 } as const;

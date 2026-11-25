@@ -1,8 +1,5 @@
 import http from 'http';
-import path from 'path';
-import fs from 'fs';
-import { BrowserWindow, dialog, shell } from 'electron';
-import { getDb } from '../database/db';
+import type { BrowserWindow } from 'electron';
 import { ProjectDiscoveryService } from '../services/ProjectDiscoveryService';
 import { ExecutionEngineService } from '../services/ExecutionEngineService';
 import { FailureIntelligenceService } from '../services/FailureIntelligenceService';
@@ -10,10 +7,18 @@ import { AnalyticsIntelligenceService } from '../services/AnalyticsIntelligenceS
 import { SchedulerAndReportService } from '../services/SchedulerAndReportService';
 import { SettingsService } from '../services/SettingsService';
 import { ArtifactCatalogService } from '../services/ArtifactCatalogService';
+import { createDispatch, type DispatchServices, type DispatchHooks } from '../../server/dispatchCore';
 
+/**
+ * Desktop bridge for the no-Electron fallback: serves the same RPC surface over HTTP
+ * (127.0.0.1 only) so the renderer can run in a plain browser against the desktop
+ * backend. The hosted multi-user server lives in src/server/webServer.ts and shares
+ * the exact same dispatch table (dispatchCore.ts).
+ */
 export class LocalBridgeServer {
   private server: http.Server | null = null;
   private sseClients = new Set<http.ServerResponse>();
+  private dispatch: (method: string, args: any[]) => Promise<any>;
 
   constructor(
     private discoveryService: ProjectDiscoveryService,
@@ -24,7 +29,23 @@ export class LocalBridgeServer {
     private settingsService: SettingsService,
     private artifactService: ArtifactCatalogService,
     private getMainWindow: () => BrowserWindow | null
-  ) {}
+  ) {
+    const services: DispatchServices = {
+      discovery: discoveryService,
+      execution: executionService,
+      failure: failureService,
+      analytics: analyticsService,
+      schedulerReport: schedulerReportService,
+      settings: settingsService,
+      artifacts: artifactService,
+    };
+    const hooks: DispatchHooks = {
+      emitEvent: (channel, payload) => this.broadcast(channel, payload),
+      getMainWindow: this.getMainWindow,
+      isWeb: false,
+    };
+    this.dispatch = createDispatch(services, hooks);
+  }
 
   broadcast(event: string, data: any): void {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -82,177 +103,5 @@ export class LocalBridgeServer {
     });
 
     this.server.listen(port, '127.0.0.1');
-  }
-
-  private async dispatch(method: string, args: any[]): Promise<any> {
-    switch (method) {
-      case 'browseDirectory': {
-        const win = this.getMainWindow();
-        const opts: Electron.OpenDialogOptions = {
-          properties: ['openDirectory'],
-          title: 'Select Local Playwright Project Directory',
-        };
-        const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
-        return r.canceled ? null : r.filePaths[0];
-      }
-      case 'importProject':
-        return this.discoveryService.importProject(args[0]);
-      case 'listProjects':
-        return this.discoveryService.listProjects();
-      case 'deleteProject': {
-        const db = getDb();
-        const deleteCascade = db.transaction((id: string) => {
-          db.prepare('DELETE FROM healing_proposals WHERE project_id = ?').run(id);
-          db.prepare('DELETE FROM failure_analyses WHERE project_id = ?').run(id);
-          db.prepare('DELETE FROM test_results WHERE project_id = ?').run(id);
-          db.prepare('DELETE FROM execution_batches WHERE project_id = ?').run(id);
-          db.prepare('DELETE FROM discovered_tests WHERE project_id = ?').run(id);
-          db.prepare('DELETE FROM schedules WHERE project_id = ?').run(id);
-          db.prepare('DELETE FROM projects WHERE id = ?').run(id);
-        });
-        deleteCascade(args[0]);
-        return true;
-      }
-      case 'rescanProject': {
-        const project = this.discoveryService.listProjects().find((p) => p.id === args[0]);
-        if (!project) throw new Error('Project not found');
-        await this.discoveryService.discoverTests(project);
-        return this.discoveryService.buildFolderTree(args[0]);
-      }
-      case 'getTestTree':
-        return this.discoveryService.buildFolderTree(args[0]);
-      case 'listTests':
-        return this.discoveryService.listTestsForProject(args[0]);
-      case 'startExecution':
-        return this.executionService.startExecution(args[0], this.getMainWindow(), (ev, payload) =>
-          this.broadcast(ev, payload)
-        );
-      case 'stopExecution':
-        return this.executionService.stopExecution();
-      case 'getActiveExecutionStatus':
-        return {
-          isRunning: this.executionService.isRunning(),
-          activeExecutionId: this.executionService.getActiveExecutionId(),
-        };
-      case 'listExecutionBatches':
-        return this.executionService.listBatchesWithDiskSync(args[0]);
-      case 'getExecutionResults': {
-        const rows = getDb().prepare('SELECT * FROM test_results WHERE execution_id = ?').all(args[0]) as any[];
-        return rows.map((r) => ({
-          id: r.id,
-          executionId: r.execution_id,
-          projectId: r.project_id,
-          testId: r.test_id,
-          testTitle: r.test_title,
-          fullTitle: r.full_title,
-          filePath: r.file_path,
-          folderPath: r.folder_path,
-          browser: r.browser,
-          status: r.status,
-          durationMs: r.duration_ms,
-          retry: r.retry,
-          errorMessage: r.error_message || undefined,
-          stackTrace: r.stack_trace || undefined,
-          screenshotPath: r.screenshot_path || undefined,
-          videoPath: r.video_path || undefined,
-          tracePath: r.trace_path || undefined,
-          timestamp: r.timestamp,
-        }));
-      }
-      case 'compareBatches':
-        return this.analyticsService.compareBatches(args[0], args[1]);
-      case 'deleteBatch': {
-        const db = getDb();
-        const deleteCascade = db.transaction((id: string) => {
-          db.prepare(
-            `DELETE FROM healing_proposals WHERE failure_id IN (SELECT id FROM failure_analyses WHERE execution_id = ?)`
-          ).run(id);
-          db.prepare('DELETE FROM failure_analyses WHERE execution_id = ?').run(id);
-          db.prepare('DELETE FROM test_results WHERE execution_id = ?').run(id);
-          db.prepare('DELETE FROM execution_batches WHERE id = ?').run(id);
-        });
-        deleteCascade(args[0]);
-        return true;
-      }
-      case 'openReportInBrowser':
-        this.schedulerReportService.openNativeReportInBrowser(args[0]);
-        return true;
-      case 'startReportHosting':
-        return this.schedulerReportService.hostReportDirectory(path.dirname(args[0]));
-      case 'revealReportInFolder': {
-        const target = args[0];
-        if (target && fs.existsSync(target)) {
-          shell.showItemInFolder(target);
-        } else if (target) {
-          shell.openPath(path.dirname(target));
-        }
-        return true;
-      }
-      case 'listArtifacts':
-        return this.artifactService.listArtifacts(args[0]);
-      case 'previewArtifact':
-        return this.artifactService.previewArtifact(args[0], args[1]);
-      case 'openArtifact':
-        return this.artifactService.openArtifact(args[0], args[1]);
-      case 'revealArtifact':
-        return this.artifactService.revealArtifact(args[0], args[1]);
-      case 'analyzeBatchFailures':
-        return this.failureService.analyzeExecutionFailures(args[0], (_, payload) =>
-          this.broadcast('healing:progress-event', payload)
-        );
-      case 'listFailures':
-        return this.failureService.listFailures(args[0]);
-      case 'reclassifyFailure':
-        this.failureService.reclassifyFailure(args[0], args[1], args[2]);
-        return true;
-      // Generate auto-validates in the background; progress lines stream to SSE subscribers.
-      case 'generateHealingProposal':
-        return this.failureService.generateAndValidate(args[0], (_, payload) =>
-          this.broadcast('healing:progress-event', payload)
-        );
-      case 'validateProposal':
-        return this.failureService.validateProposal(args[0], args[1], (_, payload) =>
-          this.broadcast('healing:progress-event', payload)
-        );
-      case 'approveAndApplyProposal':
-        return this.failureService.approveAndApply(args[0], args[1], (_, payload) =>
-          this.broadcast('healing:progress-event', payload)
-        );
-      case 'runProposalHeaded':
-        return this.failureService.runProposalHeaded(args[0], args[1], (_, payload) =>
-          this.broadcast('healing:progress-event', payload)
-        );
-      case 'rejectProposal':
-        getDb().prepare(`UPDATE healing_proposals SET status = 'rejected' WHERE id = ?`).run(args[0]);
-        return true;
-      case 'rollbackProposal':
-        return this.failureService.rollbackProposal(args[0], (_, payload) =>
-          this.broadcast('healing:progress-event', payload)
-        );
-      case 'listProposals':
-        return this.failureService.listProposals(args[0]);
-      case 'getFlakyTests':
-        return this.analyticsService.getFlakyTests(args[0], args[1]);
-      case 'getCrossBrowserMatrix':
-        return this.analyticsService.getCrossBrowserMatrix(args[0]);
-      case 'getPerformanceBottlenecks':
-        return this.analyticsService.getPerformanceBottlenecks(args[0]);
-      case 'listSchedules':
-        return this.schedulerReportService.listSchedules();
-      case 'saveSchedule':
-        return this.schedulerReportService.saveSchedule(args[0], this.getMainWindow);
-      case 'deleteSchedule':
-        this.schedulerReportService.deleteSchedule(args[0]);
-        return true;
-      case 'getSettings':
-        return this.settingsService.getSettings();
-      case 'saveSettings':
-        return this.settingsService.saveSettings(args[0]);
-      case 'saveApiKey':
-        this.settingsService.saveApiKey(args[0]);
-        return this.settingsService.getSettings();
-      default:
-        throw new Error(`Unknown RPC method: ${method}`);
-    }
   }
 }

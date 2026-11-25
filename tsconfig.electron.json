@@ -1,8 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "lib": ["ES2022"],
+    "module": "Node16",
+    "lib": [
+      "ES2022"
+    ],
     "outDir": "dist-electron",
     "rootDir": "src",
     "strict": true,
@@ -10,11 +12,17 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "moduleResolution": "node",
-    "baseUrl": ".",
+    "moduleResolution": "node16",
     "paths": {
-      "@shared/*": ["src/shared/*"]
+      "@shared/*": [
+        "./src/shared/*"
+      ]
     }
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*"]
+  "include": [
+    "src/main/**/*",
+    "src/preload/**/*",
+    "src/shared/**/*",
+    "src/server/**/*"
+  ]
 }

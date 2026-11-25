@@ -7,7 +7,7 @@ exports.FailureIntelligenceService = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
-const uuid_1 = require("uuid");
+const crypto_1 = require("crypto");
 const ipcChannels_1 = require("../../shared/ipcChannels");
 const db_1 = require("../database/db");
 const pathSecurity_1 = require("../utils/pathSecurity");
@@ -135,7 +135,7 @@ class FailureIntelligenceService {
                 if (spawnError)
                     log += `${log ? '\n' : ''}[Control Center] Failed to launch Playwright: ${spawnError}`;
                 if (timedOut)
-                    log += `${log ? '\n' : ''}[Control Center] Timed out after ${Math.round(timeoutMs / 1000)}s — process killed.`;
+                    log += `${log ? '\n' : ''}[Control Center] Timed out after ${(timeoutMs / 60000).toFixed(1)} min — process killed.`;
                 resolve({ exitCode: code, log, timedOut, spawnError, executableLabel });
             });
         });
@@ -249,7 +249,7 @@ class FailureIntelligenceService {
             }
         }
         return {
-            id: (0, uuid_1.v4)(),
+            id: (0, crypto_1.randomUUID)(),
             resultId: res.id,
             executionId: res.execution_id,
             projectId: res.project_id,
@@ -570,7 +570,7 @@ ${validationLog.slice(-6000)}
                 : 'No deterministic fix applies to this failure and no AI provider is configured. Configure Settings → AI Provider (Gemini / OpenAI / Ollama), or repair the spec manually.';
         }
         const proposal = {
-            id: (0, uuid_1.v4)(),
+            id: (0, crypto_1.randomUUID)(),
             failureId: failure.id,
             projectId: failure.project_id,
             testTitle: failure.test_title,

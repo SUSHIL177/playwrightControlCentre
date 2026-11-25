@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SettingsService = void 0;
-const electron_1 = require("electron");
+const runtime_1 = require("../platform/runtime");
 const db_1 = require("../database/db");
 const DEFAULT_SETTINGS = {
     defaultProjectId: '',
@@ -55,21 +55,41 @@ class SettingsService {
             db.prepare(`DELETE FROM app_settings WHERE key = 'ai_api_key_enc'`).run();
             return;
         }
-        const payload = electron_1.safeStorage.isEncryptionAvailable()
-            ? electron_1.safeStorage.encryptString(rawApiKey.trim()).toString('base64')
-            : Buffer.from(rawApiKey.trim(), 'utf-8').toString('base64');
+        const payload = (0, runtime_1.encryptSecret)(rawApiKey.trim());
         db.prepare(`
       INSERT INTO app_settings (key, value) VALUES ('ai_api_key_enc', ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `).run(payload);
+    }
+    saveGitToken(rawToken) {
+        const db = (0, db_1.getDb)();
+        const token = rawToken.trim();
+        if (!token) {
+            db.prepare(`DELETE FROM app_settings WHERE key = 'git_import_token_enc'`).run();
+            return;
+        }
+        db.prepare(`
+      INSERT INTO app_settings (key, value) VALUES ('git_import_token_enc', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run((0, runtime_1.encryptSecret)(token));
+    }
+    getGitToken() {
+        const db = (0, db_1.getDb)();
+        const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'git_import_token_enc'`).get();
+        if (!row)
+            return null;
+        return (0, runtime_1.decryptSecret)(row.value);
+    }
+    hasGitToken() {
+        const db = (0, db_1.getDb)();
+        return Boolean(db.prepare(`SELECT value FROM app_settings WHERE key = 'git_import_token_enc'`).get());
     }
     getApiKey() {
         const db = (0, db_1.getDb)();
         const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'ai_api_key_enc'`).get();
         if (!row)
             return null;
-        const buf = Buffer.from(row.value, 'base64');
-        return electron_1.safeStorage.isEncryptionAvailable() ? electron_1.safeStorage.decryptString(buf) : buf.toString('utf-8');
+        return (0, runtime_1.decryptSecret)(row.value);
     }
 }
 exports.SettingsService = SettingsService;

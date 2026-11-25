@@ -17,6 +17,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { ArtifactFile, ArtifactKind, ArtifactPreview, ProjectConfig } from '@shared/types';
+import { DESKTOP_CAPS, fetchCapabilities, type WebCapabilities } from '../webMode';
 
 type KindFilter = 'all' | ArtifactKind;
 
@@ -57,6 +58,10 @@ export const ArtifactsPage: React.FC<{
   refreshKey: number;
 }> = ({ project, refreshKey }) => {
   const [artifacts, setArtifacts] = useState<ArtifactFile[]>([]);
+  const [caps, setCaps] = useState<WebCapabilities>(DESKTOP_CAPS);
+  useEffect(() => {
+    fetchCapabilities().then(setCaps).catch(() => undefined);
+  }, []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -347,13 +352,15 @@ export const ArtifactsPage: React.FC<{
                   >
                     <ExternalLink className="w-4 h-4" />
                   </button>
-                  <button
-                    onClick={() => fire('reveal')}
-                    title="Reveal in folder"
-                    className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
-                  >
-                    <FolderOpen className="w-4 h-4" />
-                  </button>
+                  {!caps.webMode && (
+                    <button
+                      onClick={() => fire('reveal')}
+                      title="Reveal in folder"
+                      className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
+                    >
+                      <FolderOpen className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="flex-1 min-h-0 overflow-auto p-3">
@@ -370,12 +377,14 @@ export const ArtifactsPage: React.FC<{
                       >
                         <ExternalLink className="w-3.5 h-3.5" /> Open with default app
                       </button>
-                      <button
-                        onClick={() => fire('reveal')}
-                        className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-medium inline-flex items-center gap-1.5"
-                      >
-                        <FolderOpen className="w-3.5 h-3.5" /> Reveal in folder
-                      </button>
+                      {!caps.webMode && (
+                        <button
+                          onClick={() => fire('reveal')}
+                          className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-medium inline-flex items-center gap-1.5"
+                        >
+                          <FolderOpen className="w-3.5 h-3.5" /> Reveal in folder
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : preview?.contentType === 'image' && preview.dataUrl ? (

@@ -8,11 +8,102 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const child_process_1 = require("child_process");
 const util_1 = require("util");
-const uuid_1 = require("uuid");
+const crypto_1 = require("crypto");
 const db_1 = require("../database/db");
 const pathSecurity_1 = require("../utils/pathSecurity");
+const tenant_1 = require("../platform/tenant");
 const execFileAsync = (0, util_1.promisify)(child_process_1.execFile);
+function scrubSecret(text, secret) {
+    if (!secret)
+        return text;
+    let out = text;
+    // Raw token and its base64 form both appear in git's stderr on auth failures.
+    out = out.split(secret).join('***');
+    const b64 = Buffer.from(secret, 'utf8').toString('base64');
+    out = out.split(b64).join('***');
+    return out;
+}
 class ProjectDiscoveryService {
+    /**
+     * Clone a git repository into the user's workspace and import it as a project.
+     * Authentication: an optional access token is passed via git's one-shot
+     * `http.extraHeader` config flag (Basic auth) so the credential is never
+     * persisted to the clone's .git/config. Embedded credentials in URLs are refused.
+     * The token is scrubbed from every error message that surfaces in the UI.
+     */
+    async importProjectFromGit(opts) {
+        const url = String(opts?.url || '').trim();
+        const token = typeof opts?.token === 'string' ? opts.token.trim() : '';
+        const branch = typeof opts?.branch === 'string' ? opts.branch.trim() : '';
+        if (!url)
+            throw new Error('Repository URL is required.');
+        if (url.length > 500 || /[\r\n\t]/.test(url)) {
+            throw new Error('Repository URL contains invalid characters.');
+        }
+        const web = (0, tenant_1.isWebTenant)();
+        const isHttps = /^https:\/\//i.test(url);
+        const isLocal = !web && (path_1.default.isAbsolute(url) || /^file:\/\//i.test(url));
+        if (!isHttps && !isLocal) {
+            throw new Error(web
+                ? 'Hosted pacc only clones HTTPS git URLs (e.g. https://github.com/org/repo.git).'
+                : 'Only https:// URLs, file:// URLs or absolute local paths are supported.');
+        }
+        if (isHttps && /^https:\/\/[^/\s]+@/i.test(url)) {
+            throw new Error('Repository URL must not embed credentials — use the access-token field instead.');
+        }
+        if (branch && !/^[A-Za-z0-9._/-]+$/.test(branch)) {
+            throw new Error('Branch contains invalid characters.');
+        }
+        const cleaned = url.replace(/\.git\/?$/, '').replace(/\/+$/, '');
+        const baseName = (path_1.default.basename(cleaned) || 'repo').replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 80) || 'repo';
+        fs_1.default.mkdirSync((0, tenant_1.reposRoot)(), { recursive: true, mode: 0o700 });
+        const dest = (0, tenant_1.reposRoot)(`${baseName}-${(0, crypto_1.randomBytes)(3).toString('hex')}`);
+        const gitBin = process.env.PACC_GIT_BIN || 'git';
+        const args = ['clone', '--depth', '1'];
+        if (branch)
+            args.push('--branch', branch);
+        args.push(url, dest);
+        // Token travels via git's GIT_CONFIG_* env mechanism — never argv (invisible to `ps`),
+        // never the remote URL (not persisted in .git/config).
+        const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+        if (isHttps && token) {
+            const host = url.split('/')[2] || '';
+            const username = /gitlab/i.test(host) ? 'oauth2' : 'x-access-token';
+            const basic = Buffer.from(`${username}:${token}`, 'utf8').toString('base64');
+            env.GIT_CONFIG_COUNT = '1';
+            env.GIT_CONFIG_KEY_0 = 'http.extraHeader';
+            env.GIT_CONFIG_VALUE_0 = `Authorization: Basic ${basic}`;
+        }
+        try {
+            await execFileAsync(gitBin, args, {
+                timeout: 10 * 60 * 1000,
+                maxBuffer: 16 * 1024 * 1024,
+                env,
+            });
+        }
+        catch (err) {
+            try {
+                fs_1.default.rmSync(dest, { recursive: true, force: true });
+            }
+            catch {
+                /* best effort */
+            }
+            const raw = String(err?.stderr || err?.message || err);
+            throw new Error(`Git clone failed: ${scrubSecret(raw.trim(), token)}`);
+        }
+        try {
+            return await this.importProject(dest);
+        }
+        catch (err) {
+            try {
+                fs_1.default.rmSync(dest, { recursive: true, force: true });
+            }
+            catch {
+                /* best effort */
+            }
+            throw err;
+        }
+    }
     async importProject(rawPath) {
         const rootPath = (0, pathSecurity_1.normalizeWinPath)(rawPath);
         if (!fs_1.default.existsSync(rootPath) || !fs_1.default.statSync(rootPath).isDirectory()) {
@@ -93,7 +184,7 @@ class ProjectDiscoveryService {
         const existing = db.prepare('SELECT id, created_at FROM projects WHERE root_path = ?').get(rootPath);
         const now = new Date().toISOString();
         const project = {
-            id: existing?.id || (0, uuid_1.v4)(),
+            id: existing?.id || (0, crypto_1.randomUUID)(),
             name: projectName,
             rootPath,
             configPath,

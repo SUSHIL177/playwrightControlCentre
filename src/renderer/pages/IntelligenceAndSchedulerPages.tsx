@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CalendarPlus, Trash2, KeyRound, Save } from 'lucide-react';
 import { AppSettings, FlakyTestMetric, ProjectConfig, ScheduleConfig } from '@shared/types';
+import { formatMinutes } from '@shared/format';
 
 export const FlakyAndPerformancePage: React.FC<{
   mode: 'flaky' | 'cross-browser' | 'performance';
@@ -159,8 +160,8 @@ export const FlakyAndPerformancePage: React.FC<{
                 <tr key={idx}>
                   <td className="p-3 text-white font-medium">{t.testTitle}</td>
                   <td className="p-3 text-slate-300">{t.browser}</td>
-                  <td className="p-3 text-amber-300 font-mono">{(t.avgDurationMs / 1000).toFixed(2)}s</td>
-                  <td className="p-3 text-rose-300 font-mono">{(t.maxDurationMs / 1000).toFixed(2)}s</td>
+                  <td className="p-3 text-amber-300 font-mono">{formatMinutes(t.avgDurationMs)}</td>
+                  <td className="p-3 text-rose-300 font-mono">{formatMinutes(t.maxDurationMs)}</td>
                   <td className="p-3">{t.totalRetries}</td>
                 </tr>
               ))

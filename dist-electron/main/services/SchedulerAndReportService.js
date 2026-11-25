@@ -8,8 +8,9 @@ const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const http_1 = __importDefault(require("http"));
 const node_cron_1 = __importDefault(require("node-cron"));
-const uuid_1 = require("uuid");
-const electron_1 = require("electron");
+const crypto_1 = require("crypto");
+const runtime_1 = require("../platform/runtime");
+const tenant_1 = require("../platform/tenant");
 const db_1 = require("../database/db");
 class SchedulerAndReportService {
     executionEngine;
@@ -27,12 +28,41 @@ class SchedulerAndReportService {
             }
         }
     }
+    /**
+     * Hosted mode: register one tenant's persisted schedules out-of-band. The cron
+     * callback executes with the tenant bound so runs land in that user's workspace.
+     */
+    initPersistedSchedulesForTenant(ctx, db, getMainWindow) {
+        (0, tenant_1.runWithTenant)(ctx, () => {
+            const rows = db.prepare('SELECT * FROM schedules WHERE enabled = 1').all();
+            for (const r of rows) {
+                this.registerCronJob({
+                    id: r.id,
+                    projectId: r.project_id,
+                    name: r.name,
+                    cronExpression: r.cron_expression,
+                    frequencyLabel: r.frequency_label,
+                    environment: r.environment,
+                    browsers: JSON.parse(r.browsers || '["chromium"]'),
+                    mode: r.mode,
+                    tag: r.tag || undefined,
+                    workers: r.workers,
+                    headed: Boolean(r.headed),
+                    enabled: true,
+                    lastRunAt: r.last_run_at || undefined,
+                    nextRunAt: r.next_run_at || undefined,
+                    webhookUrl: r.webhook_url || undefined,
+                    notifyEmail: r.notify_email || undefined,
+                }, getMainWindow);
+            }
+        });
+    }
     saveSchedule(config, getMainWindow) {
         if (!node_cron_1.default.validate(config.cronExpression)) {
             throw new Error(`Invalid cron expression: ${config.cronExpression}`);
         }
         const db = (0, db_1.getDb)();
-        const id = config.id || (0, uuid_1.v4)();
+        const id = config.id || (0, crypto_1.randomUUID)();
         const record = { ...config, id };
         db.prepare(`
       INSERT INTO schedules (
@@ -86,38 +116,44 @@ class SchedulerAndReportService {
         (0, db_1.getDb)().prepare('DELETE FROM schedules WHERE id = ?').run(id);
     }
     registerCronJob(sched, getMainWindow) {
+        const capturedTenant = (0, tenant_1.tenantContext)(); // undefined for the desktop app
         const task = node_cron_1.default.schedule(sched.cronExpression, async () => {
-            if (this.executionEngine.isRunning()) {
-                return;
-            }
-            const now = new Date().toISOString();
-            (0, db_1.getDb)().prepare('UPDATE schedules SET last_run_at = ? WHERE id = ?').run(now, sched.id);
-            try {
-                const batch = await this.executionEngine.startExecution({
-                    projectId: sched.projectId,
-                    mode: sched.mode,
-                    tag: sched.tag,
-                    browsers: sched.browsers,
-                    headed: sched.headed,
-                    workers: sched.workers,
-                    environment: sched.environment,
-                    description: `[Scheduled] ${sched.name}`,
-                }, getMainWindow());
-                if (sched.webhookUrl) {
-                    await fetch(sched.webhookUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            text: `Playwright Scheduled Run Started: *${sched.name}* (${batch.id}) on ${sched.environment}`,
-                        }),
-                    }).catch(() => { });
-                }
-            }
-            catch {
-                // Logged via execution engine
-            }
+            if (capturedTenant)
+                return (0, tenant_1.runWithTenant)(capturedTenant, () => this.runScheduledJob(sched, getMainWindow));
+            return this.runScheduledJob(sched, getMainWindow);
         });
         this.tasks.set(sched.id, task);
+    }
+    async runScheduledJob(sched, getMainWindow) {
+        if (this.executionEngine.isRunning()) {
+            return;
+        }
+        const now = new Date().toISOString();
+        (0, db_1.getDb)().prepare('UPDATE schedules SET last_run_at = ? WHERE id = ?').run(now, sched.id);
+        try {
+            const batch = await this.executionEngine.startExecution({
+                projectId: sched.projectId,
+                mode: sched.mode,
+                tag: sched.tag,
+                browsers: sched.browsers,
+                headed: sched.headed,
+                workers: sched.workers,
+                environment: sched.environment,
+                description: `[Scheduled] ${sched.name}`,
+            }, getMainWindow());
+            if (sched.webhookUrl) {
+                await fetch(sched.webhookUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text: `Playwright Scheduled Run Started: *${sched.name}* (${batch.id}) on ${sched.environment}`,
+                    }),
+                }).catch(() => { });
+            }
+        }
+        catch {
+            // Logged via execution engine
+        }
     }
     unregisterCronJob(id) {
         const existing = this.tasks.get(id);
@@ -130,7 +166,7 @@ class SchedulerAndReportService {
         if (!fs_1.default.existsSync(htmlReportPath)) {
             throw new Error(`Native Playwright HTML report not found at ${htmlReportPath}`);
         }
-        electron_1.shell.openPath(htmlReportPath);
+        (0, runtime_1.openPath)(htmlReportPath);
     }
     hostReportDirectory(reportDir) {
         if (this.reportServer) {
