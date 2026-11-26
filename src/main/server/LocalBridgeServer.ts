@@ -7,6 +7,8 @@ import { AnalyticsIntelligenceService } from '../services/AnalyticsIntelligenceS
 import { SchedulerAndReportService } from '../services/SchedulerAndReportService';
 import { SettingsService } from '../services/SettingsService';
 import { ArtifactCatalogService } from '../services/ArtifactCatalogService';
+import { SpecAnalysisService } from '../services/SpecAnalysisService';
+import { ImprovementAdvisorService } from '../services/ImprovementAdvisorService';
 import { createDispatch, type DispatchServices, type DispatchHooks } from '../../server/dispatchCore';
 
 /**
@@ -28,6 +30,8 @@ export class LocalBridgeServer {
     private schedulerReportService: SchedulerAndReportService,
     private settingsService: SettingsService,
     private artifactService: ArtifactCatalogService,
+    private specAnalysis: SpecAnalysisService,
+    private improvement: ImprovementAdvisorService,
     private getMainWindow: () => BrowserWindow | null
   ) {
     const services: DispatchServices = {
@@ -38,6 +42,8 @@ export class LocalBridgeServer {
       schedulerReport: schedulerReportService,
       settings: settingsService,
       artifacts: artifactService,
+      specAnalysis,
+      improvement,
     };
     const hooks: DispatchHooks = {
       emitEvent: (channel, payload) => this.broadcast(channel, payload),

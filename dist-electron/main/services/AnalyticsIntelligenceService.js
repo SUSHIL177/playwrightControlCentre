@@ -75,31 +75,6 @@ class AnalyticsIntelligenceService {
         }
         return Array.from(matrix.values());
     }
-    getPerformanceBottlenecks(projectId) {
-        const db = (0, db_1.getDb)();
-        const slowTests = db
-            .prepare(`
-        SELECT test_id as testId, test_title as testTitle, folder_path as folderPath,
-               browser, AVG(duration_ms) as avgDurationMs, MAX(duration_ms) as maxDurationMs,
-               MIN(duration_ms) as minDurationMs, COUNT(*) as runs, SUM(retry) as totalRetries
-        FROM test_results
-        WHERE project_id = ?
-        GROUP BY test_id, browser
-        ORDER BY avgDurationMs DESC
-        LIMIT 25
-      `)
-            .all(projectId);
-        const folderDurations = db
-            .prepare(`
-        SELECT folder_path as folderPath, AVG(duration_ms) as avgDurationMs, COUNT(*) as executions
-        FROM test_results
-        WHERE project_id = ?
-        GROUP BY folder_path
-        ORDER BY avgDurationMs DESC
-      `)
-            .all(projectId);
-        return { slowTests, folderDurations };
-    }
     compareBatches(batchIdA, batchIdB) {
         const db = (0, db_1.getDb)();
         const resultsA = db.prepare('SELECT * FROM test_results WHERE execution_id = ?').all(batchIdA);

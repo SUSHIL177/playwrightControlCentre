@@ -13,6 +13,7 @@ const tree_kill_1 = __importDefault(require("tree-kill"));
 const ipcChannels_1 = require("../../shared/ipcChannels");
 const db_1 = require("../database/db");
 const pathSecurity_1 = require("../utils/pathSecurity");
+const effectiveConfig_1 = require("./effectiveConfig");
 const ANSI_STRIP = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 /**
  * Runs are tracked per tenant (web mode: one entry per end user; desktop: a single
@@ -156,74 +157,17 @@ class ExecutionEngineService {
         duration_ms, html_report_path, json_report_path
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?, 0, ?, ?)
     `).run(batch.id, batch.projectId, batch.description, batch.mode, batch.environment, JSON.stringify(batch.browsers), batch.tag || null, batch.status, batch.startTime, batch.htmlReportPath, batch.jsonReportPath);
+        let effectiveConfig = null;
+        // Browser override: the selection made at run time REPLACES whatever projects the
+        // imported playwright.config.ts declares (see effectiveConfig.ts). Written after the
+        // batch row exists; deleted when the run closes/errors.
         const localPlaywrightCli = path_1.default.join(project.root_path, 'node_modules', '@playwright', 'test', 'cli.js');
         const useDirectNode = fs_1.default.existsSync(localPlaywrightCli);
         const executable = useDirectNode
             ? (process.platform === 'win32' ? 'node.exe' : 'node')
             : (process.platform === 'win32' ? 'npx.cmd' : 'npx');
         const args = useDirectNode ? [localPlaywrightCli, 'test'] : ['playwright', 'test'];
-        if (options.mode === 'folder' || options.mode === 'spec') {
-            if (options.targetPaths && options.targetPaths.length > 0) {
-                args.push(...options.targetPaths.map((p) => p.replace(/\\/g, '/')));
-            }
-        }
-        else if (options.mode === 'tests' && options.testIds && options.testIds.length > 0) {
-            const placeholders = options.testIds.map(() => '?').join(',');
-            const selectedRows = db
-                .prepare(`SELECT title, relative_path FROM discovered_tests WHERE id IN (${placeholders})`)
-                .all(...options.testIds);
-            const files = Array.from(new Set(selectedRows.map((r) => r.relative_path.replace(/\\/g, '/'))));
-            args.push(...files);
-            const escapedTitles = selectedRows.map((r) => r.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-            if (escapedTitles.length > 0) {
-                args.push('--grep', `(${escapedTitles.join('|')})`);
-            }
-        }
-        else if (options.mode === 'tag' && options.tag) {
-            args.push('--grep', options.tag.startsWith('@') ? options.tag : `@${options.tag}`);
-        }
-        else if (options.mode === 'smoke') {
-            args.push('--grep', '@smoke');
-        }
-        else if (options.mode === 'failed' && options.parentExecutionId) {
-            const failedRows = db
-                .prepare(`SELECT DISTINCT test_title, file_path FROM test_results WHERE execution_id = ? AND status IN ('failed', 'timedOut')`)
-                .all(options.parentExecutionId);
-            if (failedRows.length === 0) {
-                throw new Error('No failed tests found in the specified execution batch.');
-            }
-            const relFiles = Array.from(new Set(failedRows.map((r) => path_1.default.relative(project.root_path, r.file_path).replace(/\\/g, '/'))));
-            args.push(...relFiles);
-            const escaped = failedRows.map((r) => r.test_title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-            args.push('--grep', `(${escaped.join('|')})`);
-        }
-        if (options.headed)
-            args.push('--headed');
-        if (options.workers && options.workers > 0)
-            args.push(`--workers=${options.workers}`);
-        if (typeof options.retries === 'number')
-            args.push(`--retries=${options.retries}`);
-        if (options.timeoutMs && options.timeoutMs > 0)
-            args.push(`--timeout=${options.timeoutMs}`);
-        const configuredProjects = JSON.parse(project.projects_configured || '[]');
-        for (const b of browsers) {
-            const matched = configuredProjects.find((cp) => cp.toLowerCase().includes(b.toLowerCase()));
-            if (matched) {
-                args.push(`--project=${matched}`);
-            }
-            else if (browsers.length === 1) {
-                args.push(`--browser=${b}`);
-            }
-        }
-        args.push('--reporter=list,html,json');
-        args.push(`--output=${testOutputDir}`);
         const childEnv = { ...process.env };
-        delete childEnv.NO_COLOR;
-        childEnv.FORCE_COLOR = '0';
-        childEnv.PLAYWRIGHT_HTML_REPORT = htmlReportDir;
-        childEnv.PLAYWRIGHT_HTML_OPEN = 'never';
-        childEnv.PLAYWRIGHT_JSON_OUTPUT_NAME = jsonReportFile;
-        childEnv.TEST_ENV = options.environment || process.env.TEST_ENV || 'staging';
         const capturedStdout = [];
         const emitLog = (stream, text) => {
             const payload = {
@@ -235,7 +179,85 @@ class ExecutionEngineService {
             mainWindow?.webContents.send(ipcChannels_1.IPC.EXEC_LOG_EVENT, payload);
             onEvent?.(ipcChannels_1.IPC.EXEC_LOG_EVENT, payload);
         };
-        emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n[Working Directory] ${project.root_path}\n`);
+        try {
+            effectiveConfig = (0, effectiveConfig_1.writeEffectiveConfig)(project.root_path, project.config_path, browsers);
+            if (effectiveConfig)
+                args.push('--config', effectiveConfig.configPath);
+            if (options.mode === 'folder' || options.mode === 'spec') {
+                if (options.targetPaths && options.targetPaths.length > 0) {
+                    args.push(...options.targetPaths.map((p) => p.replace(/\\/g, '/')));
+                }
+            }
+            else if (options.mode === 'tests' && options.testIds && options.testIds.length > 0) {
+                const placeholders = options.testIds.map(() => '?').join(',');
+                const selectedRows = db
+                    .prepare(`SELECT title, relative_path FROM discovered_tests WHERE id IN (${placeholders})`)
+                    .all(...options.testIds);
+                const files = Array.from(new Set(selectedRows.map((r) => r.relative_path.replace(/\\/g, '/'))));
+                args.push(...files);
+                const escapedTitles = selectedRows.map((r) => r.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+                if (escapedTitles.length > 0) {
+                    args.push('--grep', `(${escapedTitles.join('|')})`);
+                }
+            }
+            else if (options.mode === 'tag' && options.tag) {
+                args.push('--grep', options.tag.startsWith('@') ? options.tag : `@${options.tag}`);
+            }
+            else if (options.mode === 'smoke') {
+                args.push('--grep', '@smoke');
+            }
+            else if (options.mode === 'failed' && options.parentExecutionId) {
+                const failedRows = db
+                    .prepare(`SELECT DISTINCT test_title, file_path FROM test_results WHERE execution_id = ? AND status IN ('failed', 'timedOut')`)
+                    .all(options.parentExecutionId);
+                if (failedRows.length === 0) {
+                    throw new Error('No failed tests found in the specified execution batch.');
+                }
+                const relFiles = Array.from(new Set(failedRows.map((r) => path_1.default.relative(project.root_path, r.file_path).replace(/\\/g, '/'))));
+                args.push(...relFiles);
+                const escaped = failedRows.map((r) => r.test_title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+                args.push('--grep', `(${escaped.join('|')})`);
+            }
+            if (options.headed)
+                args.push('--headed');
+            if (options.workers && options.workers > 0)
+                args.push(`--workers=${options.workers}`);
+            if (typeof options.retries === 'number')
+                args.push(`--retries=${options.retries}`);
+            if (options.timeoutMs && options.timeoutMs > 0)
+                args.push(`--timeout=${options.timeoutMs}`);
+            // When the effective config wrapper is active it ALREADY pins the selected browsers —
+            // passing --project too would double-filter. Only fall back to config-matching when the
+            // wrapper could not be written (e.g. unwritable project folder).
+            if (!effectiveConfig) {
+                const configuredProjects = JSON.parse(project.projects_configured || '[]');
+                for (const b of browsers) {
+                    const matched = configuredProjects.find((cp) => cp.toLowerCase().includes(b.toLowerCase()));
+                    if (matched) {
+                        args.push(`--project=${matched}`);
+                    }
+                    else if (browsers.length === 1) {
+                        args.push(`--browser=${b}`);
+                    }
+                }
+            }
+            args.push('--reporter=list,html,json');
+            args.push(`--output=${testOutputDir}`);
+            delete childEnv.NO_COLOR;
+            childEnv.FORCE_COLOR = '0';
+            childEnv.PLAYWRIGHT_HTML_REPORT = htmlReportDir;
+            childEnv.PLAYWRIGHT_HTML_OPEN = 'never';
+            childEnv.PLAYWRIGHT_JSON_OUTPUT_NAME = jsonReportFile;
+            childEnv.TEST_ENV = options.environment || process.env.TEST_ENV || 'staging';
+            const overrideLine = effectiveConfig
+                ? `[Control Center] Browsers pinned to: ${browsers.join(', ')} (overriding playwright.config.ts projects)\n`
+                : `[Control Center] Browsers: ${browsers.join(', ')} (project config used as-is)\n`;
+            emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n[Working Directory] ${project.root_path}\n${overrideLine}`);
+        }
+        catch (err) {
+            effectiveConfig?.cleanup();
+            throw err;
+        }
         const child = (0, child_process_1.spawn)(executable, args, {
             cwd: project.root_path,
             env: childEnv,
@@ -246,6 +268,7 @@ class ExecutionEngineService {
         // A failed spawn (missing node/npx, bad cwd, EMFILE …) never emits 'close' on some platforms.
         // Surface it as a failed batch + completion event so the UI never gets stuck in "EXECUTING".
         child.on('error', (spawnErr) => {
+            effectiveConfig?.cleanup();
             if (spawnErrorHandled)
                 return;
             spawnErrorHandled = true;
@@ -269,6 +292,7 @@ class ExecutionEngineService {
             emitLog('stderr', chunk.toString('utf-8'));
         });
         child.on('close', (code) => {
+            effectiveConfig?.cleanup();
             if (spawnErrorHandled)
                 return;
             const current = this.activeRuns.get(tenantKey);

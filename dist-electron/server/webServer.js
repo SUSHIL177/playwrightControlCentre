@@ -13,6 +13,8 @@ const AnalyticsIntelligenceService_1 = require("../main/services/AnalyticsIntell
 const SchedulerAndReportService_1 = require("../main/services/SchedulerAndReportService");
 const SettingsService_1 = require("../main/services/SettingsService");
 const ArtifactCatalogService_1 = require("../main/services/ArtifactCatalogService");
+const SpecAnalysisService_1 = require("../main/services/SpecAnalysisService");
+const ImprovementAdvisorService_1 = require("../main/services/ImprovementAdvisorService");
 const dispatchCore_1 = require("./dispatchCore");
 const auth_1 = require("./auth");
 const hub_1 = require("./hub");
@@ -55,6 +57,8 @@ const failureService = new FailureIntelligenceService_1.FailureIntelligenceServi
 const analyticsService = new AnalyticsIntelligenceService_1.AnalyticsIntelligenceService();
 const schedulerReportService = new SchedulerAndReportService_1.SchedulerAndReportService(executionService);
 const artifactService = new ArtifactCatalogService_1.ArtifactCatalogService();
+const specAnalysisService = new SpecAnalysisService_1.SpecAnalysisService();
+const improvementAdvisorService = new ImprovementAdvisorService_1.ImprovementAdvisorService();
 const services = {
     discovery: discoveryService,
     execution: executionService,
@@ -63,6 +67,8 @@ const services = {
     schedulerReport: schedulerReportService,
     settings: settingsService,
     artifacts: artifactService,
+    specAnalysis: specAnalysisService,
+    improvement: improvementAdvisorService,
 };
 // ── SSE fan-out, strictly per tenant ─────────────────────────────────────────
 const sseClients = new Map();

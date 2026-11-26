@@ -17,6 +17,8 @@ const AnalyticsIntelligenceService_1 = require("./services/AnalyticsIntelligence
 const SchedulerAndReportService_1 = require("./services/SchedulerAndReportService");
 const SettingsService_1 = require("./services/SettingsService");
 const ArtifactCatalogService_1 = require("./services/ArtifactCatalogService");
+const SpecAnalysisService_1 = require("./services/SpecAnalysisService");
+const ImprovementAdvisorService_1 = require("./services/ImprovementAdvisorService");
 const LocalBridgeServer_1 = require("./server/LocalBridgeServer");
 const tenant_1 = require("./platform/tenant");
 // Keep desktop data where it always was; the web server never calls this (uses PACC_DATA_DIR / ~/.pacc).
@@ -30,7 +32,9 @@ const failureService = new FailureIntelligenceService_1.FailureIntelligenceServi
 const analyticsService = new AnalyticsIntelligenceService_1.AnalyticsIntelligenceService();
 const schedulerReportService = new SchedulerAndReportService_1.SchedulerAndReportService(executionService);
 const artifactService = new ArtifactCatalogService_1.ArtifactCatalogService();
-const bridgeServer = new LocalBridgeServer_1.LocalBridgeServer(discoveryService, executionService, failureService, analyticsService, schedulerReportService, settingsService, artifactService, () => mainWindow);
+const specAnalysisService = new SpecAnalysisService_1.SpecAnalysisService();
+const improvementAdvisorService = new ImprovementAdvisorService_1.ImprovementAdvisorService();
+const bridgeServer = new LocalBridgeServer_1.LocalBridgeServer(discoveryService, executionService, failureService, analyticsService, schedulerReportService, settingsService, artifactService, specAnalysisService, improvementAdvisorService, () => mainWindow);
 function createWindow() {
     mainWindow = new electron_1.BrowserWindow({
         width: 1480,
@@ -273,8 +277,11 @@ function registerIpcHandlers() {
     electron_1.ipcMain.handle(ipcChannels_1.IPC.INTEL_CROSS_BROWSER, (_, projectId) => {
         return analyticsService.getCrossBrowserMatrix(projectId);
     });
-    electron_1.ipcMain.handle(ipcChannels_1.IPC.INTEL_PERFORMANCE, (_, projectId) => {
-        return analyticsService.getPerformanceBottlenecks(projectId);
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.TESTS_GET_STEPS, (_, projectId, testId) => {
+        return specAnalysisService.getTestSteps(projectId, testId);
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.INTEL_IMPROVE, (_, projectId) => {
+        return improvementAdvisorService.analyze(projectId);
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.SCHEDULER_LIST, () => {
         return schedulerReportService.listSchedules();

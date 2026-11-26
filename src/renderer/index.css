@@ -49,3 +49,90 @@
     transition: none;
   }
 }
+
+/* ── PACC motion system ────────────────────────────────────────────────────
+   Subtle entrance + feedback animations for data-bearing surfaces.
+   All of it respects prefers-reduced-motion. */
+@keyframes pacc-fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pacc-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pacc-pop {
+  0% { opacity: 0; transform: scale(0.96) translateY(8px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes pacc-row-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes pacc-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes pacc-bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes pacc-pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@keyframes pacc-spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.pacc-animate-in { animation: pacc-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.pacc-animate-in-delay-1 { animation: pacc-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) 0.06s both; }
+.pacc-animate-in-delay-2 { animation: pacc-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both; }
+.pacc-animate-in-delay-3 { animation: pacc-fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) 0.18s both; }
+.pacc-fade-in { animation: pacc-fade-in 0.35s ease-out both; }
+.animate-pacc-pop { animation: pacc-pop 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.pacc-pulse-dot { animation: pacc-pulse-dot 1.4s ease-in-out infinite; }
+
+/* Staggered row entrance for data tables — add .pacc-rows to <tbody> */
+.pacc-rows tr { animation: pacc-row-in 0.35s ease-out both; }
+.pacc-rows tr:nth-child(1) { animation-delay: 0ms; }
+.pacc-rows tr:nth-child(2) { animation-delay: 40ms; }
+.pacc-rows tr:nth-child(3) { animation-delay: 80ms; }
+.pacc-rows tr:nth-child(4) { animation-delay: 120ms; }
+.pacc-rows tr:nth-child(5) { animation-delay: 160ms; }
+.pacc-rows tr:nth-child(6) { animation-delay: 200ms; }
+.pacc-rows tr:nth-child(7) { animation-delay: 240ms; }
+.pacc-rows tr:nth-child(8) { animation-delay: 280ms; }
+.pacc-rows tr:nth-child(n + 9) { animation-delay: 320ms; }
+
+/* Cards that lift on hover — for panels & KPI surfaces */
+.pacc-lift {
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.pacc-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 34px -14px rgba(2, 6, 23, 0.9), 0 0 0 1px rgba(56, 189, 248, 0.18);
+}
+
+/* Skeleton shimmer for loading states */
+.pacc-shimmer {
+  background: linear-gradient(110deg, rgba(30, 41, 59, 0.6) 8%, rgba(51, 65, 85, 0.9) 30%, rgba(30, 41, 59, 0.6) 52%);
+  background-size: 200% 100%;
+  animation: pacc-shimmer 1.6s linear infinite;
+  border-radius: 0.5rem;
+}
+
+/* Horizontal meter bars grow from the left edge */
+.pacc-bar {
+  transform-origin: left center;
+  animation: pacc-bar-grow 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pacc-animate-in, .pacc-animate-in-delay-1, .pacc-animate-in-delay-2, .pacc-animate-in-delay-3,
+  .pacc-fade-in, .animate-pacc-pop, .pacc-rows tr, .pacc-bar { animation: none !important; }
+  .pacc-shimmer { animation: none !important; background: rgba(30, 41, 59, 0.6); }
+  .pacc-lift:hover { transform: none; }
+  .pacc-pulse-dot { animation: none !important; }
+}

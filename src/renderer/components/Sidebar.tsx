@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   LayoutDashboard,
   FolderGit2,
@@ -10,7 +10,7 @@ import {
   Activity,
   Globe,
   FileDiff,
-  Gauge,
+  Sparkles,
   CalendarClock,
   FileBarChart2,
   History,
@@ -47,7 +47,7 @@ const NAV_ITEMS: Array<{ id: NavRoute; label: string; icon: React.FC<{ className
   { id: 'flaky', label: 'Flaky Intelligence', icon: Activity },
   { id: 'cross-browser', label: 'Cross-Browser', icon: Globe },
   { id: 'code-fix', label: 'Code Fix Review', icon: FileDiff },
-  { id: 'performance', label: 'Performance Intel', icon: Gauge },
+  { id: 'improve', label: 'Test Advisor', icon: Sparkles },
   { id: 'scheduler', label: 'Regression Scheduler', icon: CalendarClock },
   { id: 'reports', label: 'Reports Center', icon: FileBarChart2 },
   { id: 'history', label: 'Execution History', icon: History },
@@ -91,6 +91,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
       return false;
     }
   });
+  // Smart collapse/expand: icon-only control, plus a ⌘/Ctrl+B shortcut —
+  // ignored while the user is typing in an input/editor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'b') return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      e.preventDefault();
+      toggleCollapsedRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const toggleCollapsedRef = React.useRef<() => void>(() => {});
+
   const toggleCollapsed = () => {
     setCollapsed((prev) => {
       const next = !prev;
@@ -102,6 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       return next;
     });
   };
+  toggleCollapsedRef.current = toggleCollapsed;
 
   const items = NAV_ITEMS.filter((item) => item.id !== 'team' || (webMode && isAdmin));
   const labelCls = collapsed ? 'hidden' : 'hidden md:inline';
@@ -164,15 +181,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="border-t border-pw-border p-2 shrink-0">
         <button
           onClick={toggleCollapsed}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? 'Expand sidebar (\u2318B)' : 'Collapse sidebar (\u2318B)'}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-expanded={!collapsed}
           className={`w-full flex items-center gap-2.5 px-2 md:px-3 py-2 rounded-md text-xs font-medium text-slate-400 hover:text-slate-100 hover:bg-slate-800/70 transition-colors ${
             collapsed ? 'justify-center' : 'justify-center md:justify-start'
           }`}
         >
-          {collapsed ? <ChevronsRight className="w-4 h-4 shrink-0" /> : <ChevronsLeft className="w-4 h-4 shrink-0" />}
-          <span className={`truncate ${labelCls}`}>{collapsed ? 'Expand' : 'Collapse'}</span>
+          <span className="relative flex items-center justify-center">
+            {collapsed ? (
+              <ChevronsRight className="w-4 h-4 shrink-0 transition-transform duration-200" />
+            ) : (
+              <ChevronsLeft className="w-4 h-4 shrink-0 transition-transform duration-200" />
+            )}
+          </span>
         </button>
       </div>
 

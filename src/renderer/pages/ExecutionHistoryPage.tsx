@@ -268,7 +268,7 @@ export const ExecutionHistoryPage: React.FC<{
               <th className="p-3 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-pw-border/50">
+          <tbody className="divide-y divide-pw-border/50 pacc-rows">
             {batches.length === 0 ? (
               <tr>
                 <td colSpan={9} className="p-8 text-center text-slate-400">

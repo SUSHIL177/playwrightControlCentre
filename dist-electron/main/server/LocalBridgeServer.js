@@ -20,11 +20,13 @@ class LocalBridgeServer {
     schedulerReportService;
     settingsService;
     artifactService;
+    specAnalysis;
+    improvement;
     getMainWindow;
     server = null;
     sseClients = new Set();
     dispatch;
-    constructor(discoveryService, executionService, failureService, analyticsService, schedulerReportService, settingsService, artifactService, getMainWindow) {
+    constructor(discoveryService, executionService, failureService, analyticsService, schedulerReportService, settingsService, artifactService, specAnalysis, improvement, getMainWindow) {
         this.discoveryService = discoveryService;
         this.executionService = executionService;
         this.failureService = failureService;
@@ -32,6 +34,8 @@ class LocalBridgeServer {
         this.schedulerReportService = schedulerReportService;
         this.settingsService = settingsService;
         this.artifactService = artifactService;
+        this.specAnalysis = specAnalysis;
+        this.improvement = improvement;
         this.getMainWindow = getMainWindow;
         const services = {
             discovery: discoveryService,
@@ -41,6 +45,8 @@ class LocalBridgeServer {
             schedulerReport: schedulerReportService,
             settings: settingsService,
             artifacts: artifactService,
+            specAnalysis,
+            improvement,
         };
         const hooks = {
             emitEvent: (channel, payload) => this.broadcast(channel, payload),

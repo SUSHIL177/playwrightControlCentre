@@ -231,8 +231,10 @@ function createDispatch(services, hooks) {
                 return analyticsService.getFlakyTests(args[0], args[1]);
             case 'getCrossBrowserMatrix':
                 return analyticsService.getCrossBrowserMatrix(args[0]);
-            case 'getPerformanceBottlenecks':
-                return analyticsService.getPerformanceBottlenecks(args[0]);
+            case 'getTestSteps':
+                return services.specAnalysis.getTestSteps(args[0], args[1]);
+            case 'getImprovementAdvisor':
+                return services.improvement.analyze(args[0]);
             case 'listSchedules':
                 return schedulerReportService.listSchedules();
             case 'saveSchedule':

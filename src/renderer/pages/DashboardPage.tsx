@@ -20,13 +20,14 @@ import { batchShortLabel } from '../utils/batchFormat';
 import { toMinutes } from '@shared/format';
 import { buildWeekBuckets, startOfMonday, WEEK_PRESETS, MAX_WEEK_LIMIT, isoDate } from '../utils/weekly';
 import { WorkersModal } from '../components/WorkersModal';
+import { BrowserType } from '@shared/types';
 
 interface DashboardPageProps {
   project: ProjectConfig | null;
   tests: DiscoveredTest[];
   batches: ExecutionBatch[];
   failures: FailureAnalysisRecord[];
-  onQuickRun: (workers: number) => void;
+  onQuickRun: (workers: number, browsers: BrowserType[]) => void;
   onRefresh: () => Promise<void>;
 }
 
@@ -197,6 +198,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       </p>
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
         <FlipKpiCard
+          delayMs={0}
           label="Discovered Tests"
           icon={<CheckCircle2 className="w-4 h-4 text-sky-400" />}
           frontValue={tests.length}
@@ -205,49 +207,54 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           backCaption="suite size (unchanged across runs)"
         />
         <FlipKpiCard
+          delayMs={70}
           label="Total Passed"
           icon={<CheckCircle2 className="w-4 h-4 text-emerald-400" />}
           frontValue={latestPassed}
-          frontCaption={latest ? `latest · ${batchShortLabel(latest)}` : 'latest run'}
+          frontCaption={latest ? batchShortLabel(latest) : 'latest run'}
           backValue={totalPassed}
-          backCaption={`all-time · ${batches.length} batches`}
+          backCaption={`${batches.length} batches`}
         />
         <FlipKpiCard
+          delayMs={140}
           label="Total Failed"
           icon={<AlertTriangle className="w-4 h-4 text-rose-400" />}
           frontValue={latestFailed}
-          frontCaption={latest ? `latest · ${batchShortLabel(latest)}` : 'latest run'}
+          frontCaption={latest ? batchShortLabel(latest) : 'latest run'}
           backValue={totalFailed}
-          backCaption={`all-time · ${batches.length} batches`}
+          backCaption={`${batches.length} batches`}
         />
         <FlipKpiCard
+          delayMs={210}
           label="Pass Rate"
           icon={<Activity className="w-4 h-4 text-emerald-400" />}
           frontValue={`${latestPassRate}%`}
-          frontCaption={latest ? `latest · ${batchShortLabel(latest)}` : 'latest run'}
+          frontCaption={latest ? batchShortLabel(latest) : 'latest run'}
           backValue={`${passRate}%`}
-          backCaption={`all-time · ${totalExecuted} test runs`}
+          backCaption={`${totalExecuted} test runs`}
         />
         <FlipKpiCard
+          delayMs={280}
           label="Flaky / Skipped"
           icon={<Activity className="w-4 h-4 text-amber-400" />}
           frontValue={`${latestFlaky} / ${latestSkipped}`}
-          frontCaption={latest ? `latest · ${batchShortLabel(latest)}` : 'latest run'}
+          frontCaption={latest ? batchShortLabel(latest) : 'latest run'}
           backValue={`${totalFlaky} / ${totalSkipped}`}
-          backCaption={`all-time · ${batches.length} batches`}
+          backCaption={`${batches.length} batches`}
         />
         <FlipKpiCard
+          delayMs={350}
           label="Avg Duration"
           icon={<Clock className="w-4 h-4 text-indigo-400" />}
           frontValue={`${latestDurationMin} min`}
-          frontCaption={latest ? `latest · ${batchShortLabel(latest)}` : 'latest run'}
+          frontCaption={latest ? batchShortLabel(latest) : 'latest run'}
           backValue={`${avgDurationMin} min`}
-          backCaption={`all-time · ${batches.length} batches`}
+          backCaption={`${batches.length} batches`}
         />
       </div>
 
       {/* Weekly analytics — pick a preset week window or a custom past date range */}
-      <div className="bg-pw-panel border border-pw-border rounded-xl p-4 space-y-4">
+      <div className="bg-pw-panel border border-pw-border rounded-xl p-4 space-y-4 pacc-animate-in-delay-2">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
             <CalendarRange className="w-4 h-4 text-sky-400" /> Weekly Analytics
@@ -392,7 +399,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 <th className="text-right px-3 py-1.5">Avg min</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="pacc-rows">
               {[...weekBuckets].reverse().map((b) => (
                 <tr key={b.key} className="border-t border-pw-border text-slate-300">
                   <td className="px-3 py-1.5 whitespace-nowrap">{b.rangeLabel}</td>
@@ -480,12 +487,12 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       <WorkersModal
         open={workersModalOpen}
         title="Run Full Regression Suite"
-        description="Pick how many Playwright workers run in parallel for this batch — instead of always using 4."
+        description="Pick the browsers (overrides playwright.config.ts) and parallel workers for this batch."
         confirmLabel="Start Regression Run"
         defaultWorkers={4}
-        onConfirm={(workers) => {
+        onConfirm={(workers, browsers) => {
           setWorkersModalOpen(false);
-          onQuickRun(workers);
+          onQuickRun(workers, browsers);
         }}
         onClose={() => setWorkersModalOpen(false)}
       />
@@ -500,37 +507,40 @@ interface FlipKpiCardProps {
   frontCaption: string;
   backValue: string | number;
   backCaption: string;
+  /** Entrance delay for the stagger animation (ms). */
+  delayMs?: number;
 }
 
-const FlipKpiCard: React.FC<FlipKpiCardProps> = ({ label, icon, frontValue, frontCaption, backValue, backCaption }) => (
+const FlipKpiCard: React.FC<FlipKpiCardProps> = ({ label, icon, frontValue, frontCaption, backValue, backCaption, delayMs = 0 }) => (
   <div
-    className="kpi-flip h-28"
+    className="kpi-flip h-32 pacc-lift pacc-animate-in"
+    style={{ animationDelay: `${delayMs}ms` }}
     tabIndex={0}
     role="group"
     aria-label={`${label}: latest ${frontValue}, all-time ${backValue}`}
   >
     <div className="kpi-flip-inner">
       {/* Front — latest execution */}
-      <div className="kpi-flip-face bg-pw-panel border border-pw-border p-4 flex flex-col">
-        <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-          <span className="flex items-center gap-2 truncate">{icon}{label}</span>
+      <div className="kpi-flip-face bg-pw-panel border border-pw-border p-3 flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between gap-1.5 text-[11px] text-slate-400 min-h-[20px]">
+          <span className="flex items-center gap-1.5 truncate">{icon}{label}</span>
           <span className="text-[8px] font-bold tracking-widest text-sky-400 bg-sky-500/10 border border-sky-500/30 rounded px-1.5 py-0.5 shrink-0">
             LATEST
           </span>
         </div>
-        <div className="text-2xl font-bold text-white mt-auto leading-none">{frontValue}</div>
-        <div className="text-[9px] text-slate-500 mt-1 truncate">{frontCaption}</div>
+        <div className="text-2xl font-bold text-white mt-auto leading-none tabular-nums">{frontValue}</div>
+        <div className="text-[9px] leading-[1.25] text-slate-500 mt-1 line-clamp-2 break-words" title={frontCaption}>{frontCaption}</div>
       </div>
       {/* Back — all-time totals */}
-      <div className="kpi-flip-face kpi-flip-back bg-pw-navy border border-sky-900/60 p-4 flex flex-col">
-        <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-          <span className="flex items-center gap-2 truncate">{icon}{label}</span>
+      <div className="kpi-flip-face kpi-flip-back bg-pw-navy border border-sky-900/60 p-3 flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between gap-1.5 text-[11px] text-slate-400 min-h-[20px]">
+          <span className="flex items-center gap-1.5 truncate">{icon}{label}</span>
           <span className="text-[8px] font-bold tracking-widest text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 rounded px-1.5 py-0.5 shrink-0">
             ALL TIME
           </span>
         </div>
-        <div className="text-2xl font-bold text-sky-100 mt-auto leading-none">{backValue}</div>
-        <div className="text-[9px] text-slate-500 mt-1 truncate">{backCaption}</div>
+        <div className="text-2xl font-bold text-sky-100 mt-auto leading-none tabular-nums">{backValue}</div>
+        <div className="text-[9px] leading-[1.25] text-slate-500 mt-1 line-clamp-2 break-words" title={backCaption}>{backCaption}</div>
       </div>
     </div>
   </div>
