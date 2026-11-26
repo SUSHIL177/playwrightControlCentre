@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.extractTestBlock = extractTestBlock;
+exports.extractTestBlocks = extractTestBlocks;
 function readStringLiteral(text, quoteIndex) {
     const quote = text[quoteIndex];
     let value = '';
@@ -59,6 +60,68 @@ function extractTestBlock(source, title) {
     }
     return { found: false, startLine: 0, endLine: 0, source: '', bodySource: '', bodyStartLine: 0, steps: [], reason: `No test block titled "${String(title || '').trim()}" found in this spec.` };
 }
+function extractionFromMatch(source, match, offsets) {
+    const quoteIndex = match.index + match[0].length - 1;
+    const str = readStringLiteral(source, quoteIndex);
+    if (!str) {
+        return { found: false, startLine: 0, endLine: 0, source: '', bodySource: '', steps: [], bodyStartLine: 0, reason: 'Unreadable test title string.' };
+    }
+    const afterTitle = str.endOffset;
+    // Locate the function body: an arrow function (=>) or `function` keyword — the
+    // body is the first '{' after it (skips destructured `async ({ page })` args).
+    const rest = source.slice(afterTitle);
+    const arrowIdx = rest.indexOf('=>');
+    const funcIdx = rest.indexOf('function');
+    let bodyBrace = -1;
+    if (arrowIdx !== -1 && (funcIdx === -1 || arrowIdx < funcIdx)) {
+        bodyBrace = source.indexOf('{', afterTitle + arrowIdx);
+    }
+    else if (funcIdx !== -1) {
+        bodyBrace = source.indexOf('{', afterTitle + funcIdx);
+    }
+    if (bodyBrace === -1) {
+        return { found: false, startLine: 0, endLine: 0, source: '', bodySource: '', steps: [], bodyStartLine: 0, reason: 'Test body is a function reference — cannot be inlined for analysis.' };
+    }
+    // Balance braces from bodyBrace to find the end of the block.
+    let depth = 0;
+    let inStr = null;
+    let endOffset = -1;
+    for (let i = bodyBrace; i < source.length; i++) {
+        const ch = source[i];
+        if (inStr) {
+            if (ch === '\\') {
+                i += 1;
+                continue;
+            }
+            if (ch === inStr)
+                inStr = null;
+            continue;
+        }
+        if (ch === '"' || ch === "'" || ch === '`') {
+            inStr = ch;
+            continue;
+        }
+        if (ch === '{')
+            depth += 1;
+        else if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                endOffset = i;
+                break;
+            }
+        }
+    }
+    if (endOffset === -1) {
+        return { found: false, startLine: 0, endLine: 0, source: '', bodySource: '', steps: [], bodyStartLine: 0, reason: 'Unbalanced braces — could not locate the end of the test block.' };
+    }
+    const startLine = offsetToLine(offsets, match.index);
+    const endLine = offsetToLine(offsets, endOffset);
+    const blockSource = source.slice(match.index, endOffset + 1);
+    const bodySource = source.slice(bodyBrace, endOffset + 1);
+    const bodyStartLine = offsetToLine(offsets, bodyBrace);
+    const steps = classifySteps(bodySource, bodyStartLine);
+    return { found: true, startLine, endLine, source: blockSource, bodySource, bodyStartLine, steps, startOffset: match.index, endOffset: endOffset + 1 };
+}
 function findTestBlock(source, wanted, offsets) {
     let match;
     TEST_CALL.lastIndex = 0;
@@ -67,63 +130,27 @@ function findTestBlock(source, wanted, offsets) {
         const str = readStringLiteral(source, quoteIndex);
         if (!str || str.value !== wanted)
             continue;
-        const afterTitle = str.endOffset;
-        // Locate the function body: an arrow function (=>) or `function` keyword — the
-        // body is the first '{' after it (skips destructured `async ({ page })` args).
-        const rest = source.slice(afterTitle);
-        const arrowIdx = rest.indexOf('=>');
-        const funcIdx = rest.indexOf('function');
-        let bodyBrace = -1;
-        if (arrowIdx !== -1 && (funcIdx === -1 || arrowIdx < funcIdx)) {
-            bodyBrace = source.indexOf('{', afterTitle + arrowIdx);
-        }
-        else if (funcIdx !== -1) {
-            bodyBrace = source.indexOf('{', afterTitle + funcIdx);
-        }
-        if (bodyBrace === -1) {
-            return { found: false, startLine: 0, endLine: 0, source: '', bodySource: '', steps: [], bodyStartLine: 0, reason: 'Test body is a function reference — cannot be inlined for analysis.' };
-        }
-        // Balance braces from bodyBrace to find the end of the block.
-        let depth = 0;
-        let inStr = null;
-        let endOffset = -1;
-        for (let i = bodyBrace; i < source.length; i++) {
-            const ch = source[i];
-            if (inStr) {
-                if (ch === '\\') {
-                    i += 1;
-                    continue;
-                }
-                if (ch === inStr)
-                    inStr = null;
-                continue;
-            }
-            if (ch === '"' || ch === "'" || ch === '`') {
-                inStr = ch;
-                continue;
-            }
-            if (ch === '{')
-                depth += 1;
-            else if (ch === '}') {
-                depth -= 1;
-                if (depth === 0) {
-                    endOffset = i;
-                    break;
-                }
-            }
-        }
-        if (endOffset === -1) {
-            return { found: false, startLine: 0, endLine: 0, source: '', bodySource: '', steps: [], bodyStartLine: 0, reason: 'Unbalanced braces — could not locate the end of the test block.' };
-        }
-        const startLine = offsetToLine(offsets, match.index);
-        const endLine = offsetToLine(offsets, endOffset);
-        const blockSource = source.slice(match.index, endOffset + 1);
-        const bodySource = source.slice(bodyBrace, endOffset + 1);
-        const bodyStartLine = offsetToLine(offsets, bodyBrace);
-        const steps = classifySteps(bodySource, bodyStartLine);
-        return { found: true, startLine, endLine, source: blockSource, bodySource, bodyStartLine, steps };
+        return extractionFromMatch(source, match, offsets);
     }
     return null;
+}
+/**
+ * Enumerate EVERY test block in a spec file — the advisor's import-time analysis is built
+ * on this (no discovery run, no execution history). Blocks that cannot be isolated are
+ * returned with `found: false` and a `reason`.
+ */
+function extractTestBlocks(source) {
+    const offsets = lineStartOffsets(source);
+    const blocks = [];
+    let match;
+    TEST_CALL.lastIndex = 0;
+    while ((match = TEST_CALL.exec(source)) !== null) {
+        const quoteIndex = match.index + match[0].length - 1;
+        const str = readStringLiteral(source, quoteIndex);
+        const title = str?.value ?? '';
+        blocks.push({ ...extractionFromMatch(source, match, offsets), title });
+    }
+    return blocks;
 }
 const cleanLine = (raw) => raw
     .trim()

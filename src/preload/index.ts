@@ -2,11 +2,14 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { IPC } from '../shared/ipcChannels';
 import {
   AppSettings,
+  ApplyFixRequest,
+  BatchHealthSummary,
   DefectClassification,
   ExecutionOptions,
   FailureCategory,
   GitImportRequest,
   HealingProgressEvent,
+  RunHealthSnapshot,
   ScheduleConfig,
   TerminalLogChunk,
 } from '../shared/types';
@@ -91,6 +94,12 @@ const controlCenterAPI = {
   getTestSteps: (projectId: string, testId: string) => ipcRenderer.invoke(IPC.TESTS_GET_STEPS, projectId, testId),
   getCrossBrowserMatrix: (projectId: string) => ipcRenderer.invoke(IPC.INTEL_CROSS_BROWSER, projectId),
   getImprovementAdvisor: (projectId: string) => ipcRenderer.invoke(IPC.INTEL_IMPROVE, projectId),
+  applyAdvisorFix: (req: ApplyFixRequest) => ipcRenderer.invoke(IPC.INTEL_APPLY_FIX, req),
+  revertAdvisorFix: (applicationId: string): Promise<{ ok: boolean; message: string }> =>
+    ipcRenderer.invoke(IPC.INTEL_REVERT_FIX, applicationId),
+  getHealth: (): Promise<RunHealthSnapshot> => ipcRenderer.invoke(IPC.INTEL_GET_HEALTH),
+  getBatchHealth: (projectId: string, batchId?: string): Promise<BatchHealthSummary | null> =>
+    ipcRenderer.invoke(IPC.INTEL_GET_BATCH_HEALTH, projectId, batchId),
 
   listSchedules: () => ipcRenderer.invoke(IPC.SCHEDULER_LIST),
   saveSchedule: (cfg: Omit<ScheduleConfig, 'id'> & { id?: string }) => ipcRenderer.invoke(IPC.SCHEDULER_SAVE, cfg),

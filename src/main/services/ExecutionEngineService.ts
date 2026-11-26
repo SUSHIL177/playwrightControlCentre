@@ -16,6 +16,7 @@ import { IPC } from '../../shared/ipcChannels';
 import { getDb } from '../database/db';
 import { ensureDirSync } from '../utils/pathSecurity';
 import { writeEffectiveConfig } from './effectiveConfig';
+import { runHealthService } from './RunHealthService';
 
 const ANSI_STRIP = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
@@ -322,6 +323,8 @@ export class ExecutionEngineService {
     });
 
     this.activeRuns.set(tenantKey, { child, executionId });
+    // Host health sampling — aggregates persist when the batch closes.
+    runHealthService.start(executionId, project.id);
     let spawnErrorHandled = false;
 
     // A failed spawn (missing node/npx, bad cwd, EMFILE …) never emits 'close' on some platforms.
@@ -333,6 +336,7 @@ export class ExecutionEngineService {
       const current = this.activeRuns.get(tenantKey);
       if (current?.child === child) this.activeRuns.delete(tenantKey);
 
+      runHealthService.finish(executionId);
       const endTime = new Date().toISOString();
       const durationMs = Math.max(0, new Date(endTime).getTime() - new Date(startTime).getTime());
       db.prepare(`UPDATE execution_batches SET status = 'failed', end_time = ?, duration_ms = ? WHERE id = ?`).run(
@@ -692,6 +696,7 @@ export class ExecutionEngineService {
     });
 
     tx();
+    runHealthService.finish(executionId);
 
     const row = db.prepare('SELECT * FROM execution_batches WHERE id = ?').get(executionId) as any;
     return this.mapBatchRow(row);

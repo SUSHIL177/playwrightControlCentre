@@ -19,6 +19,7 @@ const SettingsService_1 = require("./services/SettingsService");
 const ArtifactCatalogService_1 = require("./services/ArtifactCatalogService");
 const SpecAnalysisService_1 = require("./services/SpecAnalysisService");
 const ImprovementAdvisorService_1 = require("./services/ImprovementAdvisorService");
+const RunHealthService_1 = require("./services/RunHealthService");
 const LocalBridgeServer_1 = require("./server/LocalBridgeServer");
 const tenant_1 = require("./platform/tenant");
 // Keep desktop data where it always was; the web server never calls this (uses PACC_DATA_DIR / ~/.pacc).
@@ -282,6 +283,18 @@ function registerIpcHandlers() {
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.INTEL_IMPROVE, (_, projectId) => {
         return improvementAdvisorService.analyze(projectId);
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.INTEL_APPLY_FIX, (_, req) => {
+        return improvementAdvisorService.applyFix(req);
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.INTEL_REVERT_FIX, (_, applicationId) => {
+        return improvementAdvisorService.revertFix(applicationId);
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.INTEL_GET_HEALTH, () => {
+        return RunHealthService_1.runHealthService.snapshot();
+    });
+    electron_1.ipcMain.handle(ipcChannels_1.IPC.INTEL_GET_BATCH_HEALTH, (_, projectId, batchId) => {
+        return RunHealthService_1.runHealthService.getBatchHealth(projectId, batchId);
     });
     electron_1.ipcMain.handle(ipcChannels_1.IPC.SCHEDULER_LIST, () => {
         return schedulerReportService.listSchedules();

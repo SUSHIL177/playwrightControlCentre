@@ -12,7 +12,7 @@ import {
   MinusCircle,
   RotateCcw,
 } from 'lucide-react';
-import { ExecutionBatch, TestExecutionResult, TestStatus } from '@shared/types';
+import { BatchHealthSummary, ExecutionBatch, TestExecutionResult, TestStatus } from '@shared/types';
 import { batchFullLabel, batchShortLabel, statusAppearance } from '../utils/batchFormat';
 import { formatMinutes, toMinutes } from '@shared/format';
 
@@ -52,11 +52,74 @@ const toCsv = (batchId: string, rows: TestExecutionResult[]): string => {
   return lines.join('\r\n');
 };
 
+/* ── Per-batch host health (CPU / memory captured during the run) ─────────── */
+const RunHealthPanel: React.FC<{
+  projectId: string | undefined;
+  batch: ExecutionBatch;
+  rows?: TestExecutionResult[];
+}> = ({ projectId, batch, rows }) => {
+  const [health, setHealth] = useState<BatchHealthSummary | null | undefined>(undefined);
+
+  useEffect(() => {
+    let live = true;
+    setHealth(undefined);
+    if (!projectId) {
+      setHealth(null);
+      return;
+    }
+    window.pwControlCenter
+      .getBatchHealth(projectId, batch.id)
+      .then((h: BatchHealthSummary | null) => { if (live) setHealth(h); })
+      .catch(() => { if (live) setHealth(null); });
+    return () => { live = false; };
+    // Re-fetch only when the batch identity changes — metrics are immutable post-run.
+  }, [projectId, batch.id]);
+
+  const durationMinutes = batch.durationMs / 60000;
+  const throughput = durationMinutes > 0 && batch.totalTests > 0 ? Math.round(batch.totalTests / durationMinutes) : null;
+  const retriesBurned = rows ? rows.reduce((sum, r) => sum + (r.retry || 0), 0) : null;
+
+  const Tile: React.FC<{ label: string; value: string; sub?: string; tone?: string }> = ({ label, value, sub, tone }) => (
+    <div className="rounded-lg border border-pw-border/70 bg-pw-navy/60 px-3 py-2">
+      <div className="text-[9px] uppercase tracking-widest text-slate-500">{label}</div>
+      <div className={`text-sm font-bold tabular-nums mt-0.5 ${tone || 'text-slate-100'}`}>{value}</div>
+      {sub && <div className="text-[9px] text-slate-500 mt-0.5">{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-1.5">
+        <span className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Run health — automation impact</span>
+        <span className="text-[9px] text-slate-600">host CPU/RAM sampled every 2s while this batch ran</span>
+      </div>
+      {health === undefined ? (
+        <div className="pacc-shimmer h-14 rounded-lg border border-pw-border/60" />
+      ) : health === null ? (
+        <div className="rounded-lg border border-pw-border/60 bg-pw-navy/40 px-3 py-2 text-[10px] text-slate-500">
+          No health samples were captured for this batch (it ran before capture existed, or the sampler could not start). Duration and throughput below are still available.
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
+          <Tile label="CPU avg" value={health.cpuAvgPercent !== null ? `${health.cpuAvgPercent.toFixed(0)}%` : '—'} sub={`peak ${health.cpuPeakPercent !== null ? health.cpuPeakPercent.toFixed(0) : '—'}%`} tone={health.cpuPeakPercent !== null && health.cpuPeakPercent >= 85 ? 'text-amber-300' : 'text-emerald-300'} />
+          <Tile label="RAM avg" value={health.memAvgMb !== null ? `${(health.memAvgMb / 1024).toFixed(1)} GB` : '—'} sub={`peak ${health.memPeakMb !== null ? (health.memPeakMb / 1024).toFixed(1) : '—'} of ${(health.memTotalMb / 1024).toFixed(0)} GB`} tone={health.memPeakMb !== null && health.memPeakMb / health.memTotalMb > 0.9 ? 'text-amber-300' : 'text-sky-300'} />
+          <Tile label="Load (1m) peak" value={health.load1Peak.toFixed(1)} tone="text-slate-200" />
+          <Tile label="Duration" value={formatMinutes(batch.durationMs)} sub="wall-clock" tone="text-slate-100" />
+          <Tile label="Throughput" value={throughput !== null ? `${throughput} t/min` : '—'} sub={`${batch.totalTests} tests`} tone="text-violet-300" />
+          <Tile label="Retries burned" value={retriesBurned !== null ? String(retriesBurned) : '—'} sub={`${batch.flaky} flaky`} tone={retriesBurned ? 'text-amber-300' : 'text-slate-100'} />
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const ExecutionHistoryPage: React.FC<{
   batches: ExecutionBatch[];
   onRefresh: () => Promise<void>;
   onRerunFailed: (batchId: string) => void;
-}> = ({ batches, onRefresh, onRerunFailed }) => {
+  /** Needed to read the persisted per-batch health metrics. */
+  projectId?: string;
+}> = ({ batches, onRefresh, onRerunFailed, projectId }) => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -350,7 +413,8 @@ export const ExecutionHistoryPage: React.FC<{
                     {isOpen && (
                       <tr className="bg-pw-navy/40">
                         <td colSpan={9} className="p-0">
-                          <div className="p-4 space-y-2">
+                          <div className="p-4 space-y-3">
+                            <RunHealthPanel projectId={projectId} batch={b} rows={rows} />
                             <div className="flex items-center justify-between gap-3 flex-wrap">
                               <span className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">
                                 Per-test results {rows ? `(${rows.length})` : ''}

@@ -7,6 +7,7 @@ import { ExecutionEngineService } from '../main/services/ExecutionEngineService'
 import { FailureIntelligenceService } from '../main/services/FailureIntelligenceService';
 import { AnalyticsIntelligenceService } from '../main/services/AnalyticsIntelligenceService';
 import { SchedulerAndReportService } from '../main/services/SchedulerAndReportService';
+import { runHealthService } from '../main/services/RunHealthService';
 import { SettingsService } from '../main/services/SettingsService';
 import { ArtifactCatalogService } from '../main/services/ArtifactCatalogService';
 import { SpecAnalysisService } from '../main/services/SpecAnalysisService';
@@ -255,6 +256,14 @@ export function createDispatch(services: DispatchServices, hooks: DispatchHooks)
         return services.specAnalysis.getTestSteps(args[0], args[1]);
       case 'getImprovementAdvisor':
         return services.improvement.analyze(args[0]);
+      case 'applyAdvisorFix':
+        return services.improvement.applyFix(args[0]);
+      case 'revertAdvisorFix':
+        return services.improvement.revertFix(args[0]);
+      case 'getHealth':
+        return runHealthService.snapshot();
+      case 'getBatchHealth':
+        return runHealthService.getBatchHealth(args[0], args[1]);
       case 'listSchedules':
         return schedulerReportService.listSchedules();
       case 'saveSchedule':

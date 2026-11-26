@@ -359,6 +359,7 @@ export default function App() {
           {route === 'history' && (
             <ExecutionHistoryPage
               batches={batches}
+              projectId={activeProject?.id}
               onRefresh={async () => {
                 if (activeProject) await loadProjectData(activeProject.id);
               }}

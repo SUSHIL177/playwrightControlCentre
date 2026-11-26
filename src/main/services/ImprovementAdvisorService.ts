@@ -1,203 +1,120 @@
 import fs from 'fs';
 import path from 'path';
+import { randomUUID as uuidv4 } from 'crypto';
 import { getDb } from '../database/db';
-import { extractTestBlock } from '../../shared/specAnalysis';
+import { extractTestBlocks, DiscoveredTestBlock } from '../../shared/specAnalysis';
 import {
   ImprovementAdvisorResult,
   TestImprovementAdvice,
   ImprovementIssue,
+  AdviceFix,
+  ApplyFixRequest,
+  ApplyFixResult,
+  RevertFixResult,
 } from '../../shared/types';
 
 /**
- * Deterministic, offline "code reviewer" for Playwright specs.
+ * Import-time "code reviewer" for Playwright specs.
  *
- * Signal sources per discovered test case:
- *   1. Static analysis of the actual test block (locators, waits, assertions, structure)
- *   2. Runtime telemetry from THE MOST RECENT EXECUTION of each test — duration vs
- *      the suite median, retries burned, flake/last-status (never all-time history)
- *   3. Discovery metadata (last status, tags, retry counter)
+ * The analysis is derived COMPLETELY from the imported project's spec sources —
+ * a local folder or a repository cloned from any version-control host (both land
+ * on disk as a project root). No discovery run, no browsers, no execution history —
+ * importing an untouched clone is enough to get a full review.
  *
- * Every recommendation carries an explicit impact statement, an exact before → after
- * code change when one applies, and — where measurable — an estimated wall-clock saving.
- * No network calls, no LLM — results are reproducible.
+ * Signal source per spec file:
+ *   1. Static analysis of EVERY `test()` block (locators, waits, assertions, structure)
+ *   2. File metadata (path/line) — for reporting only
+ *
+ * Every recommendation carries an explicit impact statement AND the exact code change
+ * it implies — `fix.before` matched against the spec, `fix.after` the replacement —
+ * so the UI can offer a one-click Apply. Deterministic rules only, no LLM, no network.
+ * `applyFix()` writes the change to the spec on disk (with a DB-stored backup);
+ * `revertFix()` restores it byte-identically.
  */
+
+const SPEC_FILE_RE = /\.(spec|test|e2e)\.[cm]?[jt]sx?$/i;
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', 'coverage',
+  'playwright-report', 'test-results', 'blob-report', '.next', '.nuxt', '.turbo',
+  '.cache', '.vercel', '.output',
+]);
+const MAX_SPEC_FILES = 400;
+const MAX_SPEC_BYTES = 512 * 1024;
+const MAX_DEPTH = 10;
+
+/** Recursively enumerate candidate spec files under the project root (deterministic order). */
+function walkSpecFiles(root: string): string[] {
+  const found: string[] = [];
+  const visit = (dir: string, depth: number) => {
+    if (depth > MAX_DEPTH || found.length >= MAX_SPEC_FILES) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // unreadable directory — skip, never abort the scan
+    }
+    for (const entry of entries) {
+      if (found.length >= MAX_SPEC_FILES) return;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+        visit(full, depth + 1);
+      } else if (entry.isFile() && SPEC_FILE_RE.test(entry.name)) {
+        try {
+          if (fs.statSync(full).size <= MAX_SPEC_BYTES) found.push(full);
+        } catch {
+          /* unreadable — skip */
+        }
+      }
+    }
+  };
+  visit(root, 0);
+  return found.sort();
+}
+
 export class ImprovementAdvisorService {
   analyze(projectId: string): ImprovementAdvisorResult {
     const db = getDb();
     const project = db.prepare('SELECT root_path FROM projects WHERE id = ?').get(projectId) as
       | { root_path: string }
       | undefined;
-    const root = project?.root_path ? path.resolve(project.root_path) : null;
+    if (!project?.root_path) throw new Error('Imported project not found — re-import it first.');
+    const root = path.resolve(project.root_path);
+    if (!fs.existsSync(root)) throw new Error(`Project root does not exist on disk anymore: ${root}`);
 
-    const tests = db
-      .prepare(
-        `SELECT id, title, full_title, file_path, relative_path, line, tags, last_status, last_duration_ms, retry_count
-         FROM discovered_tests WHERE project_id = ? ORDER BY relative_path, line`
-      )
-      .all(projectId) as Array<{
-      id: string;
-      title: string;
-      full_title: string;
-      file_path: string;
-      relative_path: string;
-      line: number;
-      tags: string;
-      last_status: string | null;
-      last_duration_ms: number | null;
-      retry_count: number | null;
-    }>;
-
-    // Latest execution batch (any terminal status) — lets the UI say exactly what the
-    // telemetry is scoped to, and gives a "no runs yet" signal when absent.
-    const latestBatch = db
-      .prepare(
-        `SELECT id, mode, browsers, start_time, end_time FROM execution_batches
-         WHERE project_id = ? AND status != 'running'
-         ORDER BY start_time DESC LIMIT 1`
-      )
-      .get(projectId) as { id: string; mode: string; browsers: string; start_time: string } | undefined;
-    const telemetryScope: 'latest' | 'none' = tests.some((t) => t.last_duration_ms !== null && t.last_duration_ms !== undefined)
-      ? 'latest'
-      : 'none';
-    const latestRunLabel = latestBatch
-      ? `${latestBatch.id.startsWith('RUN-') ? 'Run #' + parseInt(latestBatch.id.split('-')[1] || '0', 10) : latestBatch.id} · ${latestBatch.mode.toUpperCase()} · ${new Date(latestBatch.start_time).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
-      : null;
-
-    // Suite median of each test's LATEST duration — still a "latest runs" signal.
-    const durationSamples = tests
-      .map((t) => Number(t.last_duration_ms))
-      .filter((n) => Number.isFinite(n) && n > 0)
-      .sort((a, b) => a - b);
-    const mid = Math.floor(durationSamples.length / 2);
-    const medianDuration = durationSamples.length
-      ? durationSamples.length % 2 === 1
-        ? durationSamples[mid]
-        : Math.round((durationSamples[mid - 1] + durationSamples[mid]) / 2)
-      : 0;
-
-    const fileCache = new Map<string, string | null>();
+    const specFiles = walkSpecFiles(root);
     const advice: TestImprovementAdvice[] = [];
     let analyzedCount = 0;
 
-    for (const test of tests) {
-      analyzedCount += 1;
-      let tags: string[] = [];
+    for (const filePath of specFiles) {
+      let content: string;
       try {
-        tags = JSON.parse(test.tags || '[]');
+        content = fs.readFileSync(filePath, 'utf-8');
       } catch {
-        tags = [];
+        continue;
       }
+      const relativePath = path.relative(root, filePath).replace(/\\/g, '/');
+      const blocks = extractTestBlocks(content).filter((b) => b.found);
+      for (const block of blocks) {
+        analyzedCount += 1;
+        const issues = this.analyzeBlock(block);
+        if (issues.length === 0) continue;
 
-      // Telemetry — LATEST run only (discovered_tests mirrors the most recent execution).
-      const latestDurationMs = test.last_duration_ms ?? null;
-      const retryCount = Number(test.retry_count || 0);
-      const flakyInLatestRun = test.last_status === 'flaky' || retryCount > 0;
-
-      const issues: ImprovementIssue[] = [];
-
-      // ── Source analysis ──────────────────────────────────────────────────────
-      const filePath = test.file_path;
-      const inRoot =
-        root && filePath
-          ? path.resolve(filePath).startsWith(root + path.sep) || path.resolve(filePath) === root
-          : false;
-
-      if (filePath && inRoot && fs.existsSync(filePath)) {
-        let content = fileCache.get(filePath);
-        if (content === undefined) {
-          try {
-            content = fs.readFileSync(filePath, 'utf-8');
-          } catch {
-            content = null;
-          }
-          fileCache.set(filePath, content);
-        }
-        if (content) {
-          issues.push(...this.analyzeSource(content, test.full_title || test.title));
-        }
-      }
-
-      // ── Runtime telemetry analysis ───────────────────────────────────────────
-      if (latestDurationMs !== null && latestDurationMs !== undefined) {
-        if (medianDuration > 0 && latestDurationMs > medianDuration * 1.8 && latestDurationMs > 5000) {
-          const overage = Math.round(latestDurationMs - medianDuration);
-          issues.push({
-            id: 'slow-vs-suite',
-            severity: 'warning',
-            category: 'performance',
-            title: `Latest run ${(latestDurationMs / 1000).toFixed(1)}s vs ${(medianDuration / 1000).toFixed(1)}s suite median`,
-            detail: `In its most recent execution this test spent ~${(overage / 1000).toFixed(1)}s longer than a typical test in the suite.`,
-            recommendation:
-              'Audit setup/teardown (beforeEach), replace repeated UI flows with storage-state seeding, and split oversized tests — or tag it to run in a deeper tier instead of blocking smoke.',
-            impact: `Cutting even the overage saves ~${(overage / 1000).toFixed(1)}s from every batch this test belongs to.`,
-            estimatedTimeSavedMs: overage,
-          });
-        } else if (latestDurationMs > 60_000) {
-          issues.push({
-            id: 'very-slow',
-            severity: 'warning',
-            category: 'performance',
-            title: `Very slow test (${(latestDurationMs / 1000).toFixed(0)}s in the latest run)`,
-            detail: 'Tests above ~60s dominate regression wall-clock and are prime flake candidates under load.',
-            recommendation: 'Split the scenario, seed data via API/fixtures, and remove inter-step sleeps.',
-            impact: 'Parallel workers finish faster and the batch window shrinks — direct CI cost and queue-time win.',
-            estimatedTimeSavedMs: Math.round(latestDurationMs * 0.3),
-          });
-        }
-      }
-
-      if (flakyInLatestRun) {
-        issues.push({
-          id: 'flaky-latest',
-          severity: test.last_status === 'flaky' && retryCount > 0 ? 'warning' : 'warning',
-          category: 'flakiness',
-          title: test.last_status === 'flaky' ? 'Passed only on retry in the latest run' : 'Needed a retry in the latest run',
-          detail: `Latest run: status=${test.last_status || 'unknown'}, ${retryCount} retry attempt(s) burned.`,
-          recommendation:
-            'Replace positional/CSS locators with getByRole/getByTestId, drop fixed sleeps for web-first assertions, and isolate shared state. Re-run 10× to confirm stability.',
-          impact: 'Eliminating the retry tax recovers a full extra test duration per flaky run and restores trust in red builds.',
+        const estimatedTimeSavedMs = issues.reduce((sum, i) => sum + (i.estimatedTimeSavedMs || 0), 0);
+        const score = issues.reduce(
+          (sum, i) => sum + (i.severity === 'critical' ? 50 : i.severity === 'warning' ? 18 : 5),
+          0
+        );
+        advice.push({
+          testId: `${relativePath}:${block.startLine}:${block.title}`,
+          testTitle: block.title,
+          relativePath,
+          line: block.startLine,
+          score,
+          estimatedTimeSavedMs,
+          issues,
         });
       }
-
-      if (test.last_status === 'failed' || test.last_status === 'timedOut') {
-        issues.push({
-          id: 'last-run-failed',
-          severity: 'warning',
-          category: 'reliability',
-          title: test.last_status === 'timedOut' ? 'Last run timed out' : 'Last run failed',
-          detail:
-            test.last_status === 'timedOut'
-              ? 'The test exhausted its timeout — usually a missing/slow wait condition rather than a genuinely slow app.'
-              : 'The test is red on its latest attempt. Investigate before the next merge trains the team to ignore failures.',
-          recommendation:
-            test.last_status === 'timedOut'
-              ? 'Scope the timeout to the slow step (test.slow() or per-expect timeout), and wait for a concrete condition instead of the global timeout.'
-              : 'Open Failure Intelligence for the classified root cause and apply the recommended action or self-heal proposal.',
-          impact: 'A green, trusted suite merges faster; red-but-ignored tests hide real regressions and erode the safety net.',
-        });
-      }
-
-      if (issues.length === 0) continue;
-
-      const estimatedTimeSavedMs = issues.reduce((sum, i) => sum + (i.estimatedTimeSavedMs || 0), 0);
-      const score = issues.reduce(
-        (sum, i) => sum + (i.severity === 'critical' ? 50 : i.severity === 'warning' ? 18 : 5),
-        0
-      );
-
-      advice.push({
-        testId: test.id,
-        testTitle: test.full_title || test.title,
-        relativePath: test.relative_path,
-        line: test.line,
-        latestDurationMs,
-        lastStatus: test.last_status || undefined,
-        retryCount,
-        flakyInLatestRun,
-        score,
-        estimatedTimeSavedMs,
-        issues,
-      });
     }
 
     advice.sort((a, b) => b.score - a.score || b.estimatedTimeSavedMs - a.estimatedTimeSavedMs);
@@ -211,19 +128,16 @@ export class ImprovementAdvisorService {
       generatedAt: new Date().toISOString(),
       projectId,
       analyzedCount,
-      tests: advice.slice(0, 100),
-      telemetryScope,
-      latestRunLabel,
+      scannedFiles: specFiles.length,
+      tests: advice.slice(0, 200),
       summary: { flaggedTests: advice.length, critical, warning, info, totalEstimatedTimeSavedMs },
     };
   }
 
-  private analyzeSource(content: string, fullTitle: string): ImprovementIssue[] {
+  private analyzeBlock(block: DiscoveredTestBlock): ImprovementIssue[] {
     const issues: ImprovementIssue[] = [];
-    const block = extractTestBlock(content, fullTitle);
-    if (!block.found) return issues;
-
     const body = block.bodySource;
+    if (!body) return issues;
     const bodyLines = body.split('\n');
     const lineOf = (offsetInBody: number): number | undefined => {
       let acc = 0;
@@ -261,14 +175,11 @@ export class ImprovementAdvisorService {
         impact: `Recovers ~${(total / 1000).toFixed(1)}s per run and removes the single most common cause of passes locally / failures in CI.`,
         estimatedTimeSavedMs: total,
         fix: {
-          before: hardWaits.map((w) => w.stmt).join('\n'),
-          after: hardWaits
-            .map(
-              (w) =>
-                `await expect(page.getByRole(…)).toBeVisible({ timeout: ${Math.min(Math.max(w.ms, 1000), 15000)} });`
-            )
-            .join('\n'),
-          note: 'Replace … with the role + accessible name (or getByTestId) of the element this step waits for — the timeout becomes a ceiling Playwright retries until the condition holds, not a fixed sleep.',
+          replacements: hardWaits.map((w) => ({
+            before: w.stmt,
+            after: `await expect(page.getByRole(…)).toBeVisible({ timeout: ${Math.min(Math.max(w.ms, 1000), 15000)} });`,
+          })),
+          note: 'Each fixed sleep is replaced by a ceiling-capped web-first assertion — replace … with the role + accessible name (or getByTestId) of the element this step waits for.',
         },
       });
     }
@@ -450,14 +361,21 @@ export class ImprovementAdvisorService {
         recommendation: 'Add web-first assertions on the outcome: toHaveURL, toHaveText, toBeVisible, toHaveCount — at least one per user journey.',
         impact: 'The test starts guarding real behaviour; silent regressions become visible on the PR that introduces them.',
         fix: {
-          after: "await expect(page.getByText('…')).toBeVisible();\n// or: await expect(page).toHaveURL(/…/);",
-          note: 'Add this after the final action — pick the observable outcome that defines success for this journey. No lines to replace; this is an addition.',
+          after: "await expect(page.getByText('…')).toBeVisible();",
+          insertAtEndOfTest: true,
+          note: 'Inserted right before the closing brace of this test — pick the observable outcome that defines success (toBeVisible / toHaveText / toHaveURL).',
         },
       });
     }
 
-    // 7) Debugging leftovers and focus traps.
-    const onlyMatch = /\.only\s*\(/.exec(body);
+    // 7) Debugging leftovers and focus traps. `.only` lives on the declaration line,
+    // not inside the body — scan the declaration prefix of the block.
+    const declSource = block.bodySource ? block.source.slice(0, block.source.length - block.bodySource.length) : block.source;
+    const declLineOf = (offsetInDecl: number): number => {
+      const upto = declSource.slice(0, offsetInDecl);
+      return block.startLine + (upto.match(/\n/g) || []).length;
+    };
+    const onlyMatch = /\.only\s*\(/.exec(declSource);
     if (onlyMatch) {
       issues.push({
         id: 'test-only',
@@ -466,7 +384,7 @@ export class ImprovementAdvisorService {
         title: '.only( focused test left in the suite',
         detail: 'Playwright runs ONLY focused tests in this file — everything else is silently skipped on this branch.',
         code: 'test.only(...)',
-        line: lineOf(onlyMatch.index),
+        line: declLineOf(onlyMatch.index),
         recommendation: 'Remove .only / rely on CI’s --forbid-only flag; enforce it with a lint rule (playwright/no-focused-test).',
         impact: 'Restores the full regression net — zero silent skips reaching main.',
         fix: {
@@ -517,6 +435,163 @@ export class ImprovementAdvisorService {
     }
 
     return issues;
+  }
+
+  /**
+   * Apply one recommendation's fix to the spec file on disk.
+   * Safety contract:
+   *   • the spec must live INSIDE the imported project root;
+   *   • matching is scoped to the originating test block (re-extracted from the
+   *     current file contents — if the block drifted, we refuse rather than
+   *     guess where an edit lands);
+   *   • either every replacement in a multi-part fix matches (inside the block)
+   *     or NOTHING is written — the operation is all-or-nothing;
+   *   • the original file contents are stored in advisor_fix_backups before the
+   *     write, so revertFix() can restore them byte-identically.
+   */
+  applyFix(req: ApplyFixRequest): ApplyFixResult {
+    const db = getDb();
+    const project = db.prepare('SELECT root_path FROM projects WHERE id = ?').get(req.projectId) as
+      | { root_path: string }
+      | undefined;
+    if (!project?.root_path) return { ok: false, message: 'Imported project not found — re-import it first.' };
+    const root = path.resolve(project.root_path);
+    const filePath = path.resolve(root, req.relativePath);
+    if (!(filePath === root || filePath.startsWith(root + path.sep))) {
+      return { ok: false, message: 'Refusing to edit a file outside the imported project root.' };
+    }
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, message: `Spec file not found: ${req.relativePath} (was it moved or deleted? Re-scan the project.)` };
+    }
+    let content: string;
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.size > 1024 * 1024) return { ok: false, message: 'Spec file exceeds 1 MB — apply the change manually.' };
+      content = fs.readFileSync(filePath, 'utf-8');
+    } catch (err: any) {
+      return { ok: false, message: `Cannot read the spec file: ${err?.message || err}` };
+    }
+
+    const fix = req.fix;
+    if (!fix || (!fix.before && !fix.replacements?.length && !fix.insertAtEndOfTest)) {
+      return { ok: false, message: 'This recommendation is a restructure, not a mechanical edit — apply it manually (each step is described in the note).' };
+    }
+
+    const blocks = extractTestBlocks(content).filter((b) => b.found);
+    const block = blocks.find((b) => b.title === req.testFullTitle);
+    if (!block || block.startOffset === undefined || block.endOffset === undefined) {
+      return { ok: false, message: 'Could not re-locate the test block (the spec changed since the analysis — re-analyze and try again).' };
+    }
+    const blockStart = block.startOffset;
+    const blockEnd = block.endOffset;
+
+    // Collect edits as {index, length, text} against absolute offsets.
+    const edits: Array<{ index: number; length: number; text: string }> = [];
+    const scopedIndexOf = (needle: string): number[] => {
+      const out: number[] = [];
+      if (!needle) return out;
+      let idx = content.indexOf(needle);
+      while (idx !== -1) {
+        if (idx >= blockStart && idx + needle.length <= blockEnd) out.push(idx);
+        idx = content.indexOf(needle, idx + 1);
+      }
+      return out;
+    };
+
+    if (fix.replacements?.length) {
+      for (const part of fix.replacements) {
+        const hits = scopedIndexOf(part.before);
+        if (hits.length === 0) {
+          return { ok: false, message: `Could not match this line inside the test block (spec changed?): ${part.before.slice(0, 80)}` };
+        }
+        for (const index of hits) edits.push({ index, length: part.before.length, text: part.after });
+      }
+    } else if (fix.before) {
+      if (!fix.after) return { ok: false, message: 'Fix payload is missing its replacement text.' };
+      const after = fix.after;
+      const hits = scopedIndexOf(fix.before);
+      if (hits.length === 0) {
+        return { ok: false, message: `Could not match the code to replace inside the test block (spec changed?): ${fix.before.slice(0, 80)}` };
+      }
+      // Identical statements inside the same test all get the same mechanical fix.
+      for (const index of hits) edits.push({ index, length: fix.before.length, text: after });
+    } else if (fix.insertAtEndOfTest) {
+      if (!fix.after) return { ok: false, message: 'Fix payload is missing its insertion text.' };
+      // Insert before the closing brace of the block, matching the body's indentation.
+      const bodyLines = content.slice(blockStart, blockEnd).split('\n');
+      let indent = '  ';
+      for (const line of bodyLines) {
+        const m2 = line.match(/^(\s+)\S/);
+        if (m2 && line.trim().length > 0) { indent = m2[1]; break; }
+      }
+      const closing = content.lastIndexOf('}', blockEnd - 1);
+      const closingIndent = indent.slice(0, Math.max(0, indent.length - 2));
+      const needsLeadingNewline = closing > 0 && content[closing - 1] !== '\n';
+      const insertion =
+        (needsLeadingNewline ? '\n' : '') +
+        fix.after.split('\n').map((l) => indent + l).join('\n') +
+        '\n' +
+        closingIndent;
+      edits.push({ index: closing, length: 0, text: insertion });
+    }
+
+    if (edits.length === 0) return { ok: false, message: 'Nothing to change.' };
+
+    // Apply all edits in one pass (descending offsets so earlier indices stay valid).
+    edits.sort((a, b) => b.index - a.index);
+    let applied = content;
+    for (const edit of edits) {
+      applied = applied.slice(0, edit.index) + edit.text + applied.slice(edit.index + edit.length);
+    }
+    if (applied === content) return { ok: false, message: 'The replacement is identical to the current code — nothing to write.' };
+
+    const applicationId = uuidv4();
+    try {
+      db.prepare(
+        `INSERT INTO advisor_fix_backups (id, project_id, relative_path, file_path, issue_id, test_title, original, applied, created_at, reverted)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+      ).run(applicationId, req.projectId, req.relativePath, filePath, req.issueId, req.testFullTitle, content, applied, new Date().toISOString());
+      fs.writeFileSync(filePath, applied, 'utf-8');
+    } catch (err: any) {
+      return { ok: false, message: `Write failed (spec untouched): ${err?.message || err}` };
+    }
+
+    return {
+      ok: true,
+      applicationId,
+      message: `Applied to ${req.relativePath} — backup saved (${edits.length} change${edits.length === 1 ? '' : 's'}). Undo is available from this page.`,
+    };
+  }
+
+  /** Byte-identical rollback of a previously applied advisor fix. */
+  revertFix(applicationId: string): RevertFixResult {
+    const db = getDb();
+    const row = db
+      .prepare('SELECT * FROM advisor_fix_backups WHERE id = ?')
+      .get(applicationId) as
+      | { id: string; file_path: string; original: string; applied: string; reverted: number }
+      | undefined;
+    if (!row) return { ok: false, message: 'Backup not found — nothing to revert.' };
+    if (row.reverted) return { ok: false, message: 'This fix was already reverted.' };
+    let current: string | null = null;
+    try {
+      current = fs.existsSync(row.file_path) ? fs.readFileSync(row.file_path, 'utf-8') : null;
+    } catch {
+      current = null;
+    }
+    if (current !== row.applied) {
+      return {
+        ok: false,
+        message: 'The spec changed since this fix was applied — refusing to overwrite your edits. Review the file manually.',
+      };
+    }
+    try {
+      fs.writeFileSync(row.file_path, row.original, 'utf-8');
+      db.prepare('UPDATE advisor_fix_backups SET reverted = 1 WHERE id = ?').run(row.id);
+    } catch (err: any) {
+      return { ok: false, message: `Revert failed (file untouched): ${err?.message || err}` };
+    }
+    return { ok: true, message: 'Original code restored byte-identically.' };
   }
 }
 
