@@ -148,6 +148,9 @@ export default function App() {
 
   const handleStartExecution = async (opts: any) => {
     if (!activeProject) return;
+    // A new execution starts with a clean terminal — the previous run's output
+    // must not bleed into this one (the error path still appends its own message).
+    setLogs([]);
     setIsRunning(true);
     try {
       const started = await window.pwControlCenter.startExecution({

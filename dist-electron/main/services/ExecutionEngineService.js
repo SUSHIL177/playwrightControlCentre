@@ -7,6 +7,7 @@ exports.ExecutionEngineService = void 0;
 const child_process_1 = require("child_process");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const os_1 = __importDefault(require("os"));
 const tenant_1 = require("../platform/tenant");
 const crypto_1 = require("crypto");
 const tree_kill_1 = __importDefault(require("tree-kill"));
@@ -53,6 +54,8 @@ class ExecutionEngineService {
             durationMs: row.duration_ms,
             htmlReportPath: row.html_report_path,
             jsonReportPath: row.json_report_path,
+            workers: row.workers ?? null,
+            workersSource: row.workers_source ?? null,
         };
     }
     isRunning() {
@@ -128,6 +131,11 @@ class ExecutionEngineService {
         (0, pathSecurity_1.ensureDirSync)(htmlReportDir);
         (0, pathSecurity_1.ensureDirSync)(testOutputDir);
         const browsers = options.browsers.length > 0 ? options.browsers : ['chromium'];
+        // Effective worker count for this run: an explicit setting wins; otherwise Playwright's
+        // own default applies (50% of the logical cores) which we reproduce for reporting.
+        const workersRequested = options.workers && options.workers > 0 ? Math.floor(options.workers) : null;
+        const workersEffective = workersRequested ?? Math.max(1, Math.floor(os_1.default.cpus().length / 2));
+        const workersSource = workersRequested ? 'requested' : 'auto';
         const startTime = new Date().toISOString();
         const description = options.description ||
             `${options.mode.toUpperCase()} Run (${browsers.join(', ')})`;
@@ -150,14 +158,16 @@ class ExecutionEngineService {
             durationMs: 0,
             htmlReportPath: path_1.default.join(htmlReportDir, 'index.html'),
             jsonReportPath: jsonReportFile,
+            workers: workersEffective,
+            workersSource,
         };
         db.prepare(`
       INSERT INTO execution_batches (
         id, project_id, description, mode, environment, browsers, tag, status,
         total_tests, passed, failed, skipped, timed_out, flaky, start_time,
-        duration_ms, html_report_path, json_report_path
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?, 0, ?, ?)
-    `).run(batch.id, batch.projectId, batch.description, batch.mode, batch.environment, JSON.stringify(batch.browsers), batch.tag || null, batch.status, batch.startTime, batch.htmlReportPath, batch.jsonReportPath);
+        duration_ms, html_report_path, json_report_path, workers, workers_source
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?, 0, ?, ?, ?, ?)
+    `).run(batch.id, batch.projectId, batch.description, batch.mode, batch.environment, JSON.stringify(batch.browsers), batch.tag || null, batch.status, batch.startTime, batch.htmlReportPath, batch.jsonReportPath, workersEffective, workersSource);
         let effectiveConfig = null;
         // Browser override: the selection made at run time REPLACES whatever projects the
         // imported playwright.config.ts declares (see effectiveConfig.ts). Written after the
@@ -253,7 +263,8 @@ class ExecutionEngineService {
             const overrideLine = effectiveConfig
                 ? `[Control Center] Browsers pinned to: ${browsers.join(', ')} (overriding playwright.config.ts projects)\n`
                 : `[Control Center] Browsers: ${browsers.join(', ')} (project config used as-is)\n`;
-            emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n[Working Directory] ${project.root_path}\n${overrideLine}`);
+            const workersLine = `[Workers] ${workersEffective} (${workersSource === 'requested' ? 'run setting' : 'Playwright default ≈ 50% of cores'})\n`;
+            emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n[Working Directory] ${project.root_path}\n${overrideLine}${workersLine}`);
         }
         catch (err) {
             effectiveConfig?.cleanup();

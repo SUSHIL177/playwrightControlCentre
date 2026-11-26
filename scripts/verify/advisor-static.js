@@ -50,7 +50,7 @@ test('structural list', async ({ page }) => {
 `;
 
 const MONOLITH_STEPS = Array.from(
-  { length: 13 },
+  { length: 22 },
   (_, i) => `  await page.getByRole('link', { name: 'Step ${i + 1}' }).click();`
 ).join('\n');
 const MONOLITH = `import { test, expect } from '@playwright/test';
@@ -61,6 +61,21 @@ ${MONOLITH_STEPS}
   await expect(page.getByRole('heading', { name: 'Done' })).toBeVisible();
 });
 `;
+
+const POM_DIR = path.join(ROOT, 'pages');
+fs.mkdirSync(POM_DIR, { recursive: true });
+const POM_FILE = `import { Page, Locator } from '@playwright/test';
+
+export class CheckoutPage {
+  readonly submit: Locator;
+  constructor(private page: Page) {
+    this.submit = page.getByRole('button', { name: 'Pay' });
+  }
+  async open() { await this.page.goto('https://example.test/cart'); }
+  async submitOrder() { await this.submit.click(); }
+}
+`;
+fs.writeFileSync(path.join(POM_DIR, 'CheckoutPage.ts'), POM_FILE);
 
 const CLEAN = `import { test, expect } from '@playwright/test';
 
@@ -93,7 +108,13 @@ fs.writeFileSync(path.join(SPEC_DIR, 'clean.spec.ts'), CLEAN);
   const result = svc.analyze('p1');
 
   console.log(`scannedFiles=${result.scannedFiles} analyzedCount=${result.analyzedCount} flagged=${result.summary.flaggedTests}`);
-  assert.strictEqual(result.scannedFiles, 4, 'all four spec files must be scanned from disk');
+  console.log(`style:`, JSON.stringify(result.style));
+  assert.ok(result.style, 'style block must be present');
+  assert.strictEqual(result.style.pomDetected, true, 'page object must be detected from pages/CheckoutPage.ts');
+  assert.ok(result.style.pomFiles >= 1, 'page object count must be at least 1');
+  assert.strictEqual(result.style.preferredLocator, 'getByRole', 'fixture specs use getByRole most');
+  assert.ok(result.style.pomFiles !== undefined);
+  assert.strictEqual(result.scannedFiles, 4, 'all four spec files must be scanned from disk (the POM helper is not a spec)');
   assert.strictEqual(result.analyzedCount, 4, 'all four test blocks must be analyzed');
   assert.strictEqual(result.telemetryScope, undefined, 'execution telemetry must not exist anymore');
   assert.strictEqual(result.latestRunLabel, undefined, 'execution telemetry must not exist anymore');
@@ -103,18 +124,24 @@ fs.writeFileSync(path.join(SPEC_DIR, 'clean.spec.ts'), CLEAN);
   const expectedRules = [
     'hard-wait', 'network-idle', 'xpath-selector', 'css-class-selector', 'structural-selector',
     'nth-ordinal', 'force-true', 'conditional-branch', 'no-assertions', 'test-only', 'page-pause', 'long-test',
+    'pom-direct-actions',
   ];
   for (const rule of expectedRules) {
     assert.ok(ids.has(rule), `planted rule never fired: ${rule}`);
   }
 
-  // The user's hard requirement: EVERY recommendation carries the exact script change.
+  // Every recommendation carries the exact script change — except the three that are
+  // advisory by design (long-test restructure, conditional-branch semantics rewrite,
+  // pom-direct-actions method extraction).
+  const ADVISORY_ONLY = new Set(['long-test', 'conditional-branch', 'pom-direct-actions']);
   for (const issue of allIssues) {
     const fix = issue.fix;
     const applicable = !!(fix && (fix.before || fix.insertAtEndOfTest || (fix.replacements && fix.replacements.length)));
-    if (issue.id === 'long-test') continue; // structural restructure — carries a skeleton, apply is intentionally manual
+    if (ADVISORY_ONLY.has(issue.id)) continue;
     assert.ok(applicable, `rule ${issue.id} has no applicable fix payload`);
   }
+  const cond = allIssues.find((i) => i.id === 'conditional-branch');
+  assert.ok(cond && cond.fix === undefined, 'conditional-branch must be advisory — a mechanical rewrite changes test semantics');
 
   const smelly = result.tests.find((t) => t.testTitle === 'smelly checkout');
   assert.ok(smelly, 'smelly test flagged');
@@ -122,6 +149,9 @@ fs.writeFileSync(path.join(SPEC_DIR, 'clean.spec.ts'), CLEAN);
   assert.strictEqual(hardWait.fix.replacements.length, 2, 'both fixed sleeps get their own before→after pair');
   assert.ok(hardWait.fix.replacements.every((r) => r.before.startsWith('await page.waitForTimeout')));
   assert.ok(hardWait.fix.replacements.every((r) => r.after.includes('toBeVisible')));
+  assert.ok(hardWait.fix.replacements.every((r) => !r.after.includes('timeout:')), 'no capped timeout — the expect timeout from playwright.config applies');
+  assert.ok(hardWait.fix.replacements.every((r) => r.after.includes('getByRole')), 'examples follow the project-preferred locator (getByRole)');
+  assert.ok(!smelly.issues.some((i) => i.id === 'long-test'), 'a ~12-step test must not be flagged as monolithic');
   const noAssert = smelly.issues.find((i) => i.id === 'no-assertions');
   assert.strictEqual(noAssert.fix.insertAtEndOfTest, true, 'additive fix inserts at the end of the test block');
 
@@ -150,7 +180,7 @@ fs.writeFileSync(path.join(SPEC_DIR, 'clean.spec.ts'), CLEAN);
   console.log('apply no-assertions:', appliedInsert.message);
   assert.strictEqual(appliedInsert.ok, true, appliedInsert.message);
   const afterInsert = fs.readFileSync(path.join(SPEC_DIR, 'smells.spec.ts'), 'utf-8');
-  const insertedLine = afterInsert.split('\n').findIndex((l) => l.includes("getByText('…')"));
+  const insertedLine = afterInsert.split('\n').findIndex((l) => l.includes('await expect('));
   assert.ok(insertedLine > 0, 'assertion line inserted');
   assert.strictEqual(afterInsert.trimEnd().split('\n').pop().trim(), '});', 'insert landed inside the test block, before its closing brace');
   const revertedInsert = svc.revertFix(appliedInsert.applicationId);

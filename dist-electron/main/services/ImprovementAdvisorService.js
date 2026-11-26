@@ -72,6 +72,112 @@ function walkSpecFiles(root) {
     visit(root, 0);
     return found.sort();
 }
+const SOURCE_FILE_RE = /\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$/i;
+/** File clearly named as a page object: LoginPage.ts / checkout.Screen.js … */
+const POM_NAME_RE = /(Page|Screen)s?\.(tsx?|jsx?|mts|cts|mjs|cjs)$/i;
+/** Directory conventionally holding page objects. */
+const POM_DIR_RE = /^(pages|page-objects|pageobjects|pom|pagefactory|page-factory|screens)$/i;
+const MAX_POM_FILES = 200;
+/**
+ * Enumerate page-object source files: either they live under a POM-style directory,
+ * or their name marks them as one (…Page.ts). Confirmed by requiring a class declaration
+ * in the head of the file so a `pages.ts` barrel or a spec fixture is not miscounted.
+ */
+function walkPageObjectFiles(root) {
+    const found = [];
+    const visit = (dir, depth, inPomDir) => {
+        if (depth > MAX_DEPTH || found.length >= MAX_POM_FILES)
+            return;
+        let entries;
+        try {
+            entries = fs_1.default.readdirSync(dir, { withFileTypes: true });
+        }
+        catch {
+            return;
+        }
+        for (const entry of entries) {
+            if (found.length >= MAX_POM_FILES)
+                return;
+            const full = path_1.default.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.'))
+                    continue;
+                visit(full, depth + 1, inPomDir || POM_DIR_RE.test(entry.name));
+            }
+            else if (entry.isFile() && SOURCE_FILE_RE.test(entry.name) && !SPEC_FILE_RE.test(entry.name)) {
+                if (!inPomDir && !POM_NAME_RE.test(entry.name))
+                    continue;
+                try {
+                    const stat = fs_1.default.statSync(full);
+                    if (stat.size > 256 * 1024)
+                        continue;
+                    const head = fs_1.default.readFileSync(full, 'utf-8').slice(0, 8192);
+                    if (/\bclass\s+[A-Za-z_]\w*\b/.test(head))
+                        found.push(full);
+                }
+                catch {
+                    /* unreadable — skip */
+                }
+            }
+        }
+    };
+    visit(root, 0, false);
+    return found.sort();
+}
+const LOCATOR_COUNTERS = [
+    { key: 'getByRole', re: /\bgetByRole\s*\(/g },
+    { key: 'getByTestId', re: /\bgetByTestId\s*\(/g },
+    { key: 'getByLabel', re: /\bgetByLabel\s*\(/g },
+    { key: 'getByPlaceholder', re: /\bgetByPlaceholder\s*\(/g },
+    { key: 'getByText', re: /\bgetByText\s*\(/g },
+    { key: 'locator', re: /\.locator\s*\(/g },
+];
+/** The preferred user-facing locator for this project, from actual usage counts. */
+function preferredLocatorFrom(counts) {
+    let best = 'none';
+    let bestN = 0;
+    for (const { key } of LOCATOR_COUNTERS) {
+        if (key === 'locator')
+            continue; // raw engine call is the fallback, not a "preference"
+        const n = counts[key] || 0;
+        if (n > bestN) {
+            bestN = n;
+            best = key;
+        }
+    }
+    if (bestN > 0)
+        return best;
+    return (counts.locator || 0) > 0 ? 'locator' : 'none';
+}
+/** Example locator in the project's own idiom (getByRole default for mixed/empty projects). */
+function preferredLoc(style) {
+    switch (style.preferredLocator) {
+        case 'getByTestId': return "page.getByTestId('…')";
+        case 'getByLabel': return "page.getByLabel('…')";
+        case 'getByPlaceholder': return "page.getByPlaceholder('…')";
+        case 'getByText': return "page.getByText('…')";
+        case 'getByRole':
+        case 'locator':
+        case 'none':
+        default: return "page.getByRole('…')";
+    }
+}
+/** Locator examples ordered with the project's preferred style first. */
+function locatorExamples(style) {
+    const pref = preferredLoc(style);
+    const prefHead = pref.split('(')[0];
+    const menu = [
+        { head: 'page.getByRole', line: "page.getByRole('button', { name: '…' })" },
+        { head: 'page.getByTestId', line: "page.getByTestId('submit-order')" },
+        { head: 'page.getByLabel', line: "page.getByLabel('Email address')" },
+    ];
+    const first = menu.find((x) => x.head === prefHead) ?? menu[0];
+    const rest = menu.filter((x) => x !== first);
+    return [`${first.line}   // preferred in this project`, ...rest.map((x) => `${x.line}   // or`)].join('\n');
+}
+const pomHint = (style) => style.pomDetected
+    ? ' If a page object wraps this screen, use its locator instead (e.g. checkoutPage.submitOrder) — same auto-retry semantics.'
+    : '';
 class ImprovementAdvisorService {
     analyze(projectId) {
         const db = (0, db_1.getDb)();
@@ -83,7 +189,14 @@ class ImprovementAdvisorService {
             throw new Error(`Project root does not exist on disk anymore: ${root}`);
         const specFiles = walkSpecFiles(root);
         const advice = [];
-        let analyzedCount = 0;
+        // Pass 1 — read every spec once to learn the project's coding style BEFORE judging
+        // any single block. Fixes then read like the project's own code, not a template.
+        const locatorCounts = {
+            getByRole: 0, getByTestId: 0, getByLabel: 0, getByPlaceholder: 0, getByText: 0, locator: 0,
+        };
+        const fixtureImportRe = /import\s*(?:type\s*)?{[^}]*\btest\b[^}]*}\s*from\s*['"]([^'"]+)['"]/g;
+        let customFixtures = false;
+        const specContents = [];
         for (const filePath of specFiles) {
             let content;
             try {
@@ -92,11 +205,37 @@ class ImprovementAdvisorService {
             catch {
                 continue;
             }
+            specContents.push({ filePath, content });
+            for (const { key, re } of LOCATOR_COUNTERS) {
+                const hits = content.match(re);
+                if (hits)
+                    locatorCounts[key] += hits.length;
+            }
+            let fixtures = fixtureImportRe.exec(content);
+            while (fixtures) {
+                if (!/^@playwright\/test$/.test(fixtures[1]))
+                    customFixtures = true;
+                fixtures = fixtureImportRe.exec(content);
+            }
+        }
+        const pomFiles = walkPageObjectFiles(root).length;
+        const style = {
+            pomDetected: pomFiles > 0,
+            pomFiles,
+            preferredLocator: preferredLocatorFrom(locatorCounts),
+            customFixtures,
+        };
+        // Pass 2 — analyze each test block with the style context in hand.
+        let analyzedCount = 0;
+        for (const { filePath, content } of specContents) {
             const relativePath = path_1.default.relative(root, filePath).replace(/\\/g, '/');
             const blocks = (0, specAnalysis_1.extractTestBlocks)(content).filter((b) => b.found);
+            // Does this file already speak POM — imports a page-object module or instantiates one?
+            const fileImportsPom = /import[^;]*?\bfrom\s*['"][^'"]*(?:pages?|pom|screens?)[^'"]*['"]/i.test(content) ||
+                /\bnew\s+[A-Za-z_]\w*(Page|Screen)\s*\(/.test(content);
             for (const block of blocks) {
                 analyzedCount += 1;
-                const issues = this.analyzeBlock(block);
+                const issues = this.analyzeBlock(block, style, fileImportsPom);
                 if (issues.length === 0)
                     continue;
                 const estimatedTimeSavedMs = issues.reduce((sum, i) => sum + (i.estimatedTimeSavedMs || 0), 0);
@@ -122,11 +261,12 @@ class ImprovementAdvisorService {
             projectId,
             analyzedCount,
             scannedFiles: specFiles.length,
+            style,
             tests: advice.slice(0, 200),
             summary: { flaggedTests: advice.length, critical, warning, info, totalEstimatedTimeSavedMs },
         };
     }
-    analyzeBlock(block) {
+    analyzeBlock(block, style, fileImportsPom = false) {
         const issues = [];
         const body = block.bodySource;
         if (!body)
@@ -168,9 +308,9 @@ class ImprovementAdvisorService {
                 fix: {
                     replacements: hardWaits.map((w) => ({
                         before: w.stmt,
-                        after: `await expect(page.getByRole(…)).toBeVisible({ timeout: ${Math.min(Math.max(w.ms, 1000), 15000)} });`,
+                        after: `await expect(${preferredLoc(style)}).toBeVisible();`,
                     })),
-                    note: 'Each fixed sleep is replaced by a ceiling-capped web-first assertion — replace … with the role + accessible name (or getByTestId) of the element this step waits for.',
+                    note: `Each sleep is replaced by the web-first assertion this step actually waits for — it auto-retries until the expect timeout in playwright.config.ts (default 5s), so nothing here is capped tighter than your suite allows. Replace … with the role + accessible name (or test id) of the element the sleep was covering.${pomHint(style)}`,
                 },
             });
         }
@@ -190,8 +330,8 @@ class ImprovementAdvisorService {
                 estimatedTimeSavedMs: 2000,
                 fix: {
                     before: networkIdle[0] ? `await ${networkIdle[0]}` : `await page.waitForLoadState('networkidle')`,
-                    after: "await page.waitForLoadState('load');\n// then assert the element you actually need:\n// await expect(page.getByRole(…)).toBeVisible();",
-                    note: 'Do not swap one blind wait for another — pair the load event with a web-first assertion on the target element.',
+                    after: `await page.waitForLoadState('load');\n// then assert the element you actually need:\n// await expect(${preferredLoc(style)}).toBeVisible();`,
+                    note: 'Do not swap one blind wait for another — pair the load event with a web-first assertion on the element you actually need.' + pomHint(style),
                 },
             });
         }
@@ -227,10 +367,8 @@ class ImprovementAdvisorService {
                 impact: 'Drastically fewer locator-fix commits per UI change; Playwright auto-waits keep working with role selectors.',
                 fix: {
                     before: `page.${offending.replace(/^page\./, '')}`,
-                    after: "page.getByRole('button', { name: '…' })   // or\n" +
-                        "page.getByTestId('submit-order')        // or\n" +
-                        "page.getByLabel('Email address')",
-                    note: 'Pick the role + accessible name (or a data-testid on markup you own) of the target element — first match wins in strict mode.',
+                    after: locatorExamples(style),
+                    note: 'Pick the role + accessible name (or a data-testid on markup you own) of the target element — first match wins in strict mode.' + pomHint(style),
                 },
             });
         }
@@ -248,9 +386,8 @@ class ImprovementAdvisorService {
                 impact: 'Selector churn stops blocking redesigns; tests keep passing when class names rotate.',
                 fix: {
                     before: `page.${offending.replace(/^page\./, '')}`,
-                    after: "page.getByRole('button', { name: '…' })   // or\n" +
-                        "page.getByTestId('…')                   // add data-testid in your markup",
-                    note: 'Same target, expressed as a user-facing contract instead of a class name.',
+                    after: locatorExamples(style),
+                    note: 'Same target, expressed as a user-facing contract instead of a class name.' + pomHint(style),
                 },
             });
         }
@@ -268,9 +405,9 @@ class ImprovementAdvisorService {
                 impact: 'UI refactors stop cascading into spec rewrites.',
                 fix: {
                     before: `page.${offending.replace(/^page\./, '')}`,
-                    after: "page.getByTestId('…')                   // or\n" +
-                        "page.getByRole('…', { name: '…' })      // the nearest semantic landmark of the leaf",
-                    note: 'Replace the whole chained path — not just the last segment — with the role/testid of the element you actually mean.',
+                    after: locatorExamples(style) +
+                        '\n// anchor on the nearest semantic landmark of the leaf — not the 5-level path',
+                    note: 'Replace the whole chained path — not just the last segment — with the role/testid of the element you actually mean.' + pomHint(style),
                 },
             });
         }
@@ -328,13 +465,12 @@ class ImprovementAdvisorService {
                 title: 'Branches on isVisible() inside the test',
                 detail: 'Two hidden test paths = double the maintenance and a coin-flip which path CI exercises.',
                 line: lineOf(conditional.index),
-                recommendation: 'Assert the branch you expect with web-first assertions; poll with expect.poll if the element arrives asynchronously.',
-                impact: 'Single deterministic path — halves the effective failure space of the test.',
-                fix: {
-                    before: conditional[0],
-                    after: "await expect(page.getByRole('…')).toBeVisible();",
-                    note: 'Keep exactly one branch. If the element may or may not appear, await expect.poll(() => locator.isVisible()).toBe(true) instead of branching.',
-                },
+                recommendation: style.pomDetected
+                    ? 'Delete the branch. If the element is expected every run, assert it (expect(locator).toBeVisible()). If it is genuinely optional, move the check INTO the page object (e.g. checkoutPage.promoBanner.isVisible()) and poll it there — expect.poll(() => promo.isVisible()).toBe(true) — so the spec stays a straight line of business steps.'
+                    : 'Delete the branch. If the element is expected every run, assert it with a web-first assertion (expect(locator).toBeVisible()). If it appears asynchronously, use expect.poll(() => locator.isVisible()).toBe(true) — never if/else on visibility inside a test.',
+                impact: 'One deterministic path per test — a failure means one real problem, not a coin-flip between two hidden paths.',
+                // No mechanical fix on purpose: rewriting an if-branch in place changes the
+                // test's semantics and can leave unbalanced braces behind. Review it by hand.
             });
         }
         // 6) Assertions present at all?
@@ -349,9 +485,9 @@ class ImprovementAdvisorService {
                 recommendation: 'Add web-first assertions on the outcome: toHaveURL, toHaveText, toBeVisible, toHaveCount — at least one per user journey.',
                 impact: 'The test starts guarding real behaviour; silent regressions become visible on the PR that introduces them.',
                 fix: {
-                    after: "await expect(page.getByText('…')).toBeVisible();",
+                    after: `await expect(${preferredLoc(style)}).toBeVisible();`,
                     insertAtEndOfTest: true,
-                    note: 'Inserted right before the closing brace of this test — pick the observable outcome that defines success (toBeVisible / toHaveText / toHaveURL).',
+                    note: 'Inserted right before the closing brace of this test — pick the observable outcome that defines success (toBeVisible / toHaveText / toHaveURL).' + pomHint(style),
                 },
             });
         }
@@ -400,15 +536,16 @@ class ImprovementAdvisorService {
                 },
             });
         }
-        // 8) Overlong tests — cognitive load and retry cost.
-        if (block.steps.length > 12) {
+        // 8) Overlong tests — cognitive load and retry cost. Only flagged on a real outlier:
+        // more than 20 steps AND no test.step() grouping (an already-structured long test is fine).
+        if (block.steps.length > 20 && !/\btest\.step\s*\(/.test(body)) {
             issues.push({
                 id: 'long-test',
                 severity: 'info',
                 category: 'maintainability',
-                title: `Monolithic test — ${block.steps.length} steps in one case`,
-                detail: 'Long tests are hard to review, slow to retry, and their failures demand heavy triage.',
-                recommendation: 'Split by journey stage into separate test cases sharing fixtures, or group sections with test.step("…", …) for readable reports.',
+                title: `Long test — ${block.steps.length} steps in one case`,
+                detail: 'Very long tests are hard to review, slow to retry, and their failures demand heavy triage. (Already using test.step()? This finding is suppressed.)',
+                recommendation: 'Group the phases with test.step("arrange" | "act" | "assert", …) for readable reports; split into sibling test() cases sharing a storageState fixture when stages are independent.',
                 impact: 'Failures localize instantly; retries only re-run the broken journey instead of the whole flow.',
                 fix: {
                     after: "await test.step('arrange', async () => { /* seed data via fixtures/API */ });\n" +
@@ -417,6 +554,25 @@ class ImprovementAdvisorService {
                     note: 'Wrap the three phases in test.step() at minimum — Playwright reports each step separately. Full split into sibling test() cases sharing a storageState fixture is better for >12 steps.',
                 },
             });
+        }
+        // 9) POM bypass — the project HAS page objects and this file/block shows no POM usage at
+        // all (no page-object import, no `new XPage()`, no test.step grouping). Only then is the
+        // raw-page count actionable advice rather than noise.
+        if (style.pomDetected && !fileImportsPom && !/\btest\.step\s*\(/.test(body)) {
+            const rawPageRe = /\bpage\.(locator|getBy\w+|fill|type|press|click|dblclick|tap|check|uncheck|selectOption|goto|waitFor\w*)\s*\(/g;
+            const rawCount = (body.match(rawPageRe) || []).length;
+            if (rawCount >= 5) {
+                issues.push({
+                    id: 'pom-direct-actions',
+                    severity: 'info',
+                    category: 'maintainability',
+                    title: `${rawCount} direct page.* calls — bypassing the project's page objects`,
+                    detail: `This project ships page objects (${style.pomFiles} found), but this test drives the page directly — navigation, locators and waits belong in the page object so the spec reads as business steps.`,
+                    recommendation: 'Move page.goto/open(), locator definitions and interactions into the matching page object; the spec should read as business steps (await checkoutPage.submitOrder()) with web-first assertions (or page-object getters that return Locators for expect()).',
+                    impact: 'DOM changes touch one page object instead of every spec — reviewers read business intent, not selector plumbing, and locator fixes stop cascading.',
+                    // Advisory by design — extracting methods is a structural change, not a mechanical edit.
+                });
+            }
         }
         return issues;
     }

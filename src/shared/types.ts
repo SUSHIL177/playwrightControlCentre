@@ -130,6 +130,10 @@ export interface ExecutionBatch {
   durationMs: number;
   htmlReportPath: string;
   jsonReportPath: string;
+  /** Effective worker count for THIS run (requested flag, or the Playwright default when auto). */
+  workers?: number | null;
+  /** Where workers came from: 'requested' (run setting / --workers=N) or 'auto' (Playwright default ≈ 50% of cores). */
+  workersSource?: 'requested' | 'auto' | null;
 }
 
 export interface TestExecutionResult {
@@ -392,6 +396,22 @@ export interface TestImprovementAdvice {
  * Import-time advisor: analysis is derived COMPLETELY from the imported project's
  * spec sources (local folder or VCS clone) — never from execution history.
  */
+/**
+ * Coding style the imported project demonstrably uses — detected from the sources,
+ * so recommendations (and their example code) read like the project's own code
+ * instead of a generic template.
+ */
+export interface AdvisorProjectStyle {
+  /** True when page-object source files were found (e.g. `pages/LoginPage.ts`). */
+  pomDetected: boolean;
+  /** How many page-object source files were found. */
+  pomFiles: number;
+  /** The user-facing locator style used most across the project's specs. */
+  preferredLocator: 'getByRole' | 'getByTestId' | 'getByLabel' | 'getByPlaceholder' | 'getByText' | 'locator' | 'none';
+  /** True when specs import `test` from a path other than '@playwright/test' (custom fixtures). */
+  customFixtures: boolean;
+}
+
 export interface ImprovementAdvisorResult {
   generatedAt: string;
   projectId: string;
@@ -400,6 +420,8 @@ export interface ImprovementAdvisorResult {
   /** Spec files that were scanned (matched *.spec.* / *.test.* / *.e2e.*). */
   scannedFiles: number;
   tests: TestImprovementAdvice[];
+  /** Coding style detected from the imported sources — recommendations follow it. */
+  style: AdvisorProjectStyle;
   summary: {
     flaggedTests: number;
     critical: number;
