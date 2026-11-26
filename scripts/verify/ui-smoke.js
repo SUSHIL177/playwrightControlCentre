@@ -169,6 +169,8 @@ const executionCompletedCbs = new Set();
 const previewCalls = [];
 const startExecutionCalls = [];
 let advisorCalls = 0;
+const applyCalls = [];
+const revertCalls = [];
 const mock = {
   browseDirectory: async () => '/fixture',
   importProject: async () => null,
@@ -200,21 +202,24 @@ const mock = {
       generatedAt: new Date().toISOString(),
       projectId: 'p1',
       analyzedCount: 2,
-      telemetryScope: 'latest',
-      latestRunLabel: 'Run #7 · FULL · Nov 23',
+      scannedFiles: 3,
       tests: [{
-        testId: 't1', testTitle: 'checkout flow', relativePath: 'tests/checkout.spec.ts', line: 3,
-        latestDurationMs: 4200, lastStatus: 'failed', retryCount: 2, flakyInLatestRun: true, score: 68,
-        estimatedTimeSavedMs: 2500,
+        testId: 'tests/checkout.spec.ts:3:checkout flow', testTitle: 'checkout flow', relativePath: 'tests/checkout.spec.ts', line: 3,
+        score: 68, estimatedTimeSavedMs: 2500,
         issues: [
           { id: 'hard-wait', severity: 'critical', category: 'flakiness', title: '1 hard-coded wait (2.5s of blind sleeping)', detail: 'waitForTimeout(2500)', code: 'await page.waitForTimeout(2500)', line: 5, recommendation: 'Delete fixed sleeps. Wait for the real condition: expect(locator).toBeVisible().', impact: 'Recovers ~2.5s per run and removes the most common CI flake.', estimatedTimeSavedMs: 2500,
-            fix: { before: 'await page.waitForTimeout(2500)', after: "await expect(page.getByRole('button', { name: 'Submit' })).toBeVisible({ timeout: 2500 })", note: 'Wait on the real condition, not the clock.' } },
-          { id: 'no-assertions', severity: 'warning', category: 'coverage', title: 'No expect() assertions in this test', detail: 'A test without assertions cannot detect a wrong result.', recommendation: 'Add web-first assertions on the outcome.', impact: 'Silent regressions become visible on the PR that introduces them.' },
+            fix: { replacements: [{ before: 'await page.waitForTimeout(2500)', after: "await expect(page.getByRole('button', { name: 'Submit' })).toBeVisible({ timeout: 2500 });" }], note: 'Wait on the real condition, not the clock.' } },
+          { id: 'no-assertions', severity: 'warning', category: 'coverage', title: 'No expect() assertions in this test', detail: 'A test without assertions cannot detect a wrong result.', recommendation: 'Add web-first assertions on the outcome.', impact: 'Silent regressions become visible on the PR that introduces them.',
+            fix: { after: "await expect(page.getByText('Order placed')).toBeVisible();", insertAtEndOfTest: true, note: 'Inserted before the closing brace.' } },
         ],
       }],
       summary: { flaggedTests: 1, critical: 1, warning: 1, info: 0, totalEstimatedTimeSavedMs: 2500 },
     };
   },
+  applyAdvisorFix: async (req) => { applyCalls.push(req); return { ok: true, applicationId: 'app-1', message: 'Applied to tests/checkout.spec.ts' }; },
+  revertAdvisorFix: async (id) => { revertCalls.push(id); return { ok: true, message: 'Original code restored' }; },
+  getHealth: async () => ({ cpuPercent: 42, memUsedMb: 8192, memTotalMb: 16384, memPercent: 50, load1: 2.4, timestamp: new Date().toISOString() }),
+  getBatchHealth: async () => ({ batchId: 'RUN-0007-20261123-071240-AB12', samples: 71, cpuAvgPercent: 54, cpuPeakPercent: 88, memAvgMb: 11264, memPeakMb: 13107.2, memTotalMb: 16384, load1Peak: 3.2, startedAt: '2026-11-23T07:12:40.000Z', endedAt: '2026-11-23T07:15:00.000Z' }),
   startWatchingTests: async () => true,
   onTestsChanged: () => () => {},
   startExecution: async (opts) => { startExecutionCalls.push(opts); return { executionId: BATCH.id }; },
@@ -321,6 +326,7 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
     if (startBtn) { click(startBtn); await flush(200); }
     check('batch launches with the selected workers (not a hardcoded 4)', startExecutionCalls.length > 0 && startExecutionCalls[startExecutionCalls.length - 1].workers === 8);
     check('batch launches with the selected browsers (chromium + firefox override)', startExecutionCalls.length > 0 && JSON.stringify(startExecutionCalls[startExecutionCalls.length - 1].browsers) === JSON.stringify(['chromium', 'firefox']));
+    check('live host-health strip shows CPU/RAM while running', /CPU 42%/.test(bodyText()) && /RAM 8.0\/16 GB/.test(bodyText()));
   }
 
   // Sidebar collapse / expand toggle
@@ -354,6 +360,9 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
   // Execution History
   nav('Execution History'); await flush();
   check('Execution History mounts', /Execution History|Run #7|Weekly full regression/i.test(bodyText()));
+  const expandHistoryBatch = window.document.querySelector('button[title="Expand per-test results"]');
+  if (expandHistoryBatch) { click(expandHistoryBatch); await flush(350); }
+  check('batch detail shows the Run health panel with CPU/RAM stats', /Run health/i.test(bodyText()) && /CPU avg/i.test(bodyText()) && /RAM avg/i.test(bodyText()) && /Throughput/i.test(bodyText()));
 
   // Artifacts — and the fresh-preview fix: a rescan must refire the preview fetch
   nav('Test Artifacts'); await flush(500);
@@ -412,10 +421,11 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
     }
   }
 
-  // Test Advisor — ranked findings, recommendation + impact render
+  // Test Advisor — source-only analysis, exact changes, one-click apply
   nav('Test Advisor'); await flush(250);
   check('Test Advisor renders ranked findings', /checkout flow/.test(bodyText()) && /hard-coded wait/i.test(bodyText()));
-  check('advisor scopes signals to the latest run', /latest execution per test/i.test(bodyText()) && bodyText().includes('Run #7'));
+  check('advisor scopes analysis to imported project source (no run data)', /Source-only analysis/.test(bodyText()) && bodyText().includes('3 spec files'));
+  check('advisor carries no execution-telemetry copy', !/latest execution per test/i.test(bodyText()) && !bodyText().includes('Flaky rate'));
   check('advisor has Export report (.md) and no Copy report', !!findButton('Export report') && !findButton('Copy report'));
   const advisorCallsBefore = advisorCalls;
   const reanalyzeBtn = findButton('Re-analyze');
@@ -425,7 +435,19 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
   const adviceHead = [...window.document.querySelectorAll('button')].find((b) => (b.textContent || '').includes('checkout flow') && (b.textContent || '').includes('tests/checkout.spec.ts'));
   if (adviceHead) { click(adviceHead); await flush(200); }
   check('advisor expands issue detail with recommendation and impact', /Recommendation/.test(bodyText()) && /Impact if implemented/.test(bodyText()));
-  check('advisor renders the exact before → after code change', /Exact change to apply/.test(bodyText()) && /waitForTimeout\(2500\)/.test(bodyText()) && /toBeVisible/.test(bodyText()));
+  check('advisor renders the exact before → after code change', /Exact change/.test(bodyText()) && /waitForTimeout\(2500\)/.test(bodyText()) && /toBeVisible/.test(bodyText()));
+  // One-click apply: inline confirm → IPC call → written banner → undo
+  const applyBtn = findButton('Apply fix');
+  check('apply button offered on the issue', !!applyBtn);
+  if (applyBtn) { click(applyBtn); await flush(150); }
+  const confirmApplyBtn = findButton('Confirm & write');
+  check('apply asks for inline confirmation before touching the spec', !!confirmApplyBtn);
+  if (confirmApplyBtn) { click(confirmApplyBtn); await flush(300); }
+  check('apply writes through the advisor IPC with the fix payload', applyCalls.length === 1 && String(applyCalls[0]?.fix?.replacements?.[0]?.before || applyCalls[0]?.fix?.before || '').includes('waitForTimeout'));
+  check('written-to-spec banner appears with undo', /Wrote to spec this session/.test(bodyText()) && !!findButton('Undo'));
+  const undoBtn = findButton('Undo');
+  if (undoBtn) { click(undoBtn); await flush(250); }
+  check('undo reverts through the advisor IPC', revertCalls.length === 1 && revertCalls[0] === 'app-1');
   const exportBtn = findButton('Export report');
   if (exportBtn) { click(exportBtn); await flush(150); }
   check('Export report downloads a dated markdown file', exportAnchorClicks.some((n) => /^test-improvement-report-\d{8}\.md$/.test(n)));

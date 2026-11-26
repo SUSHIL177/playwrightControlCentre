@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Trash2, Copy, Search, ChevronUp, ChevronDown, Square } from 'lucide-react';
 import { TerminalLogChunk } from '@shared/types';
+import { RunHealthStrip } from './RunHealthStrip';
 
 interface LiveTerminalPanelProps {
   logs: TerminalLogChunk[];
@@ -83,6 +84,7 @@ export const LiveTerminalPanel: React.FC<LiveTerminalPanelProps> = ({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <RunHealthStrip active={isRunning} />
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2 top-1.5" />
             <input

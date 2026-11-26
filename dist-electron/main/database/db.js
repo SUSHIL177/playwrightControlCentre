@@ -313,6 +313,33 @@ function runMigrations(db) {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS advisor_fix_backups (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      relative_path TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      test_title TEXT NOT NULL,
+      original TEXT NOT NULL,
+      applied TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      reverted INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS execution_batch_metrics (
+      batch_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      samples INTEGER NOT NULL DEFAULT 0,
+      cpu_avg REAL,
+      cpu_peak REAL,
+      mem_avg_mb REAL,
+      mem_peak_mb REAL,
+      mem_total_mb INTEGER NOT NULL DEFAULT 0,
+      load1_peak REAL NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL,
+      ended_at TEXT NOT NULL
+    );
   `);
     db.prepare(`UPDATE execution_batches SET status = 'stopped', end_time = ? WHERE status = 'running'`)
         .run(new Date().toISOString());

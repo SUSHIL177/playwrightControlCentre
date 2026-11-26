@@ -49,6 +49,10 @@ export const IPC = {
   INTEL_FLAKY_TESTS: 'intel:flaky-tests',
   INTEL_CROSS_BROWSER: 'intel:cross-browser',
   INTEL_IMPROVE: 'intel:improve',
+  INTEL_APPLY_FIX: 'intel:apply-fix',
+  INTEL_REVERT_FIX: 'intel:revert-fix',
+  INTEL_GET_HEALTH: 'intel:get-health',
+  INTEL_GET_BATCH_HEALTH: 'intel:get-batch-health',
   INTEL_DUPLICATES: 'intel:duplicates',
   INTEL_AI_SUMMARY: 'intel:ai-summary',
 

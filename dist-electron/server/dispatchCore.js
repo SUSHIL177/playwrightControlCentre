@@ -8,6 +8,7 @@ exports.createDispatch = createDispatch;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const db_1 = require("../main/database/db");
+const RunHealthService_1 = require("../main/services/RunHealthService");
 const runtime_1 = require("../main/platform/runtime");
 const tenant_1 = require("../main/platform/tenant");
 /** Extract the RUN-… batch id out of an archived report path, if present. */
@@ -235,6 +236,14 @@ function createDispatch(services, hooks) {
                 return services.specAnalysis.getTestSteps(args[0], args[1]);
             case 'getImprovementAdvisor':
                 return services.improvement.analyze(args[0]);
+            case 'applyAdvisorFix':
+                return services.improvement.applyFix(args[0]);
+            case 'revertAdvisorFix':
+                return services.improvement.revertFix(args[0]);
+            case 'getHealth':
+                return RunHealthService_1.runHealthService.snapshot();
+            case 'getBatchHealth':
+                return RunHealthService_1.runHealthService.getBatchHealth(args[0], args[1]);
             case 'listSchedules':
                 return schedulerReportService.listSchedules();
             case 'saveSchedule':

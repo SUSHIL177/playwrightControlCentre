@@ -328,6 +328,28 @@ export type ImprovementCategory =
   | 'reliability'
   | 'coverage';
 
+/** Exact code change a recommendation implies — the lines to replace and what to put in their place. */
+export interface AdviceFix {
+  /**
+   * The exact offending statement/fragment matched in the spec. Omitted only for purely
+   * additive edits — see `insertAtEndOfTest`. Multi-statement blocks are expressed via
+   * `replacements` instead.
+   */
+  before?: string;
+  /** Replacement for `before` (or the lines to insert, for additive fixes). Optional when `replacements` is used. */
+  after?: string;
+  /** Free-form implementation guidance shown under the diff. */
+  note?: string;
+  /**
+   * Multi-part fix — each pair is matched and replaced independently inside the test block
+   * (e.g. several `waitForTimeout(…)` statements). When present it supersedes
+   * `before`/`after` for application purposes.
+   */
+  replacements?: Array<{ before: string; after: string }>;
+  /** Additive fix: insert `after` before the closing brace of the test block (no lines are replaced). */
+  insertAtEndOfTest?: boolean;
+}
+
 export interface ImprovementIssue {
   id: string;
   severity: ImprovementSeverity;
@@ -342,13 +364,9 @@ export interface ImprovementIssue {
   line?: number;
   /**
    * Exact code change this recommendation implies — which part of the spec to
-   * replace and with what. `before` omitted when the fix is purely additive.
+   * replace and with what. Every recommendation from the static analyzer carries one.
    */
-  fix?: {
-    before?: string;
-    after: string;
-    note?: string;
-  };
+  fix?: AdviceFix;
   /** Concrete, actionable fix. */
   recommendation: string;
   /** What changes if the fix lands — the "impact if implemented" statement. */
@@ -358,33 +376,30 @@ export interface ImprovementIssue {
 }
 
 export interface TestImprovementAdvice {
+  /** Stable identity: relativePath:line — survives re-analysis of unchanged code. */
   testId: string;
   testTitle: string;
   relativePath: string;
+  /** 1-based line where the test block starts. */
   line: number;
-  /** Duration of this test in its most recent run (null when never executed). */
-  latestDurationMs: number | null;
-  /** Status of this test in its most recent run. */
-  lastStatus?: string;
-  /** Retries this test burned in its most recent run. */
-  retryCount: number;
-  /** True when the most recent run passed on retry or was marked flaky. */
-  flakyInLatestRun: boolean;
   /** Ranking score — higher means more improvement headroom. */
   score: number;
   estimatedTimeSavedMs: number;
   issues: ImprovementIssue[];
 }
 
+/**
+ * Import-time advisor: analysis is derived COMPLETELY from the imported project's
+ * spec sources (local folder or VCS clone) — never from execution history.
+ */
 export interface ImprovementAdvisorResult {
   generatedAt: string;
   projectId: string;
+  /** Test blocks analyzed across the scanned specs. */
   analyzedCount: number;
+  /** Spec files that were scanned (matched *.spec.* / *.test.* / *.e2e.*). */
+  scannedFiles: number;
   tests: TestImprovementAdvice[];
-  /** Signals come from each test's most recent run — never from all-time aggregates. */
-  telemetryScope: 'latest' | 'none';
-  /** Human label of the latest execution batch (e.g. "RUN-0007 · Full Regression · Nov 26"). */
-  latestRunLabel: string | null;
   summary: {
     flaggedTests: number;
     critical: number;
@@ -392,4 +407,56 @@ export interface ImprovementAdvisorResult {
     info: number;
     totalEstimatedTimeSavedMs: number;
   };
+}
+
+/** Payload for applying one recommendation's fix directly to the spec on disk. */
+export interface ApplyFixRequest {
+  projectId: string;
+  /** Spec path, project-root relative (as reported in the advice). */
+  relativePath: string;
+  /** Full title of the test block the issue belongs to (block-scoped matching). */
+  testFullTitle: string;
+  issueId: string;
+  fix: AdviceFix;
+}
+
+export interface ApplyFixResult {
+  ok: boolean;
+  /** Backup handle — present when the write happened; pass to revertFix to undo. */
+  applicationId?: string;
+  /** Human-readable outcome (or the reason the fix was refused). */
+  message: string;
+  /** File lines changed, when known. */
+  changedLines?: number[];
+}
+
+export interface RevertFixResult {
+  ok: boolean;
+  message: string;
+}
+
+/** Live system-health snapshot (host CPU/memory) taken on demand. */
+export interface RunHealthSnapshot {
+  /** Busy CPU percent (0–100), null until a delta sample exists. */
+  cpuPercent: number | null;
+  memUsedMb: number;
+  memTotalMb: number;
+  memPercent: number;
+  /** 1-minute load average (0 on platforms without loadavg). */
+  load1: number;
+  timestamp: string;
+}
+
+/** Persisted per-batch health summary (aggregate of samples taken while the batch ran). */
+export interface BatchHealthSummary {
+  batchId: string;
+  samples: number;
+  cpuAvgPercent: number | null;
+  cpuPeakPercent: number | null;
+  memAvgMb: number | null;
+  memPeakMb: number | null;
+  memTotalMb: number;
+  load1Peak: number;
+  startedAt: string;
+  endedAt: string;
 }

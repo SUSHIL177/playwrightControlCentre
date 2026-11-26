@@ -17,7 +17,9 @@ import {
   Timer,
   FlaskConical,
   Gauge,
-  History,
+  CheckCircle2,
+  Wand2,
+  Undo2,
 } from 'lucide-react';
 import {
   ImprovementAdvisorResult,
@@ -26,6 +28,8 @@ import {
   ImprovementCategory,
   ProjectConfig,
   TestImprovementAdvice,
+  AdviceFix,
+  ApplyFixResult,
 } from '@shared/types';
 
 const SEVERITY_META: Record<ImprovementSeverity, { label: string; chip: string; stripe: string; icon: React.ReactNode }> = {
@@ -73,7 +77,7 @@ function buildExportMarkdown(data: ImprovementAdvisorResult): string {
   const lines: string[] = [
     '# Test Improvement Report',
     `Generated: ${new Date(data.generatedAt).toLocaleString()}`,
-    `Signals: static analysis of spec sources + latest run per test${data.latestRunLabel ? ` (${data.latestRunLabel})` : ''}`,
+    `Signals: static analysis of the imported project source (no execution data) · ${data.scannedFiles} spec files scanned · ${data.analyzedCount} test blocks`,
     `Analyzed: ${data.analyzedCount} tests · Flagged: ${data.summary.flaggedTests} · Critical: ${data.summary.critical} · Warning: ${data.summary.warning} · Info: ${data.summary.info}`,
     `Estimated saving per run: ${formatSaving(data.summary.totalEstimatedTimeSavedMs)}`,
     '',
@@ -86,8 +90,17 @@ function buildExportMarkdown(data: ImprovementAdvisorResult): string {
       lines.push(`  - Why: ${i.detail}`);
       lines.push(`  - Recommendation: ${i.recommendation}`);
       if (i.fix) {
-        if (i.fix.before) lines.push(`  - Replace: \`${i.fix.before.replace(/\n/g, '` ⏎ `')}\``);
-        lines.push(`  - With: \`${i.fix.after.replace(/\n/g, '` ⏎ `')}\``);
+        if (i.fix.replacements?.length) {
+          for (const part of i.fix.replacements) {
+            lines.push(`  - Replace: \`${part.before.replace(/\n/g, '` ⏎ `')}\``);
+            lines.push(`  - With:    \`${part.after.replace(/\n/g, '` ⏎ `')}\``);
+          }
+        } else if (i.fix.before && i.fix.after) {
+          lines.push(`  - Replace: \`${i.fix.before.replace(/\n/g, '` ⏎ `')}\``);
+          lines.push(`  - With:    \`${i.fix.after.replace(/\n/g, '` ⏎ `')}\``);
+        } else if (i.fix.after) {
+          lines.push(`  - Add after the final action: \`${i.fix.after.replace(/\n/g, '` ⏎ `')}\``);
+        }
         if (i.fix.note) lines.push(`  - Note: ${i.fix.note}`);
       }
       lines.push(`  - Impact if implemented: ${i.impact}`);
@@ -108,6 +121,9 @@ export const TestAdvisorPage: React.FC<{
   const [severityFilter, setSeverityFilter] = useState<'all' | ImprovementSeverity>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [manualRefresh, setManualRefresh] = useState(0);
+  /** Fixes applied this session (newest first) — drives the Undo banner. */
+  const [applications, setApplications] = useState<Array<{ id: string; relativePath: string; title: string }>>([]);
+  const [applyError, setApplyError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!project) return;
@@ -133,6 +149,55 @@ export const TestAdvisorPage: React.FC<{
     if (severityFilter === 'all') return data.tests;
     return data.tests.filter((t) => t.issues.some((i) => i.severity === severityFilter));
   }, [data, severityFilter]);
+
+  const applyFix = useCallback(
+    async (advice: TestImprovementAdvice, issue: ImprovementIssue): Promise<ApplyFixResult> => {
+      if (!project) return { ok: false, message: 'No project selected.' };
+      const fix = issue.fix;
+      if (!fix) return { ok: false, message: 'No fix payload on this issue.' };
+      setApplyError(null);
+      try {
+        const res: ApplyFixResult = await window.pwControlCenter.applyAdvisorFix({
+          projectId: project.id,
+          relativePath: advice.relativePath,
+          testFullTitle: advice.testTitle,
+          issueId: issue.id,
+          fix,
+        });
+        if (res?.ok) {
+          setApplications((prev) => [
+            { id: res.applicationId!, relativePath: advice.relativePath, title: issue.title },
+            ...prev,
+          ]);
+          setManualRefresh((n) => n + 1); // finding should disappear on the fresh analysis
+        } else {
+          return { ok: false, message: res?.message || 'The fix was refused.' };
+        }
+        return res;
+      } catch (err: any) {
+        return { ok: false, message: err?.message || 'Apply failed.' };
+      }
+    },
+    [project?.id]
+  );
+
+  const revertApplication = useCallback(
+    async (application: { id: string; relativePath: string; title: string }) => {
+      setApplyError(null);
+      try {
+        const res = await window.pwControlCenter.revertAdvisorFix(application.id);
+        if (res?.ok) {
+          setApplications((prev) => prev.filter((a) => a.id !== application.id));
+          setManualRefresh((n) => n + 1); // issue returns after restore
+        } else {
+          setApplyError(res?.message || 'Revert failed.');
+        }
+      } catch (err: any) {
+        setApplyError(err?.message || 'Revert failed.');
+      }
+    },
+    []
+  );
 
   const exportReport = () => {
     if (!data) return;
@@ -164,17 +229,16 @@ export const TestAdvisorPage: React.FC<{
             Test Improvement Advisor
           </h1>
           <p className="text-xs text-slate-400 mt-1 max-w-2xl">
-            Statically reviews every discovered test against Playwright best practices and cross-checks runtime
-            telemetry — hard waits, brittle locators, missing assertions, retry burns — then ranks the tests where a
-            fix pays off most. Deterministic: no AI calls, fully reproducible.
+            Statically reviews every spec inside your imported project — a local folder or a repository cloned from
+            any version-control host — against Playwright best practices: hard waits, brittle locators, missing
+            assertions, focused tests. Deterministic: no AI calls, no execution history — import and it knows.
+            Every finding ships the exact code change; apply it to the spec with one click (a backup is kept).
           </p>
           <p className="text-[10px] mt-1.5 inline-flex items-center gap-1.5 font-semibold text-sky-300/90 bg-sky-500/10 border border-sky-500/25 rounded-md px-2 py-0.5">
-            <History className="w-3 h-3" />
+            <FlaskConical className="w-3 h-3" />
             {data
-              ? data.telemetryScope === 'latest'
-                ? `Signals from the latest execution per test${data.latestRunLabel ? ` — ${data.latestRunLabel}` : ''}`
-                : 'No executions recorded yet — static analysis only'
-              : 'Signals scoped to each test’s most recent run'}
+              ? `Source-only analysis — ${data.scannedFiles} spec files scanned · ${data.analyzedCount} test blocks`
+              : 'Source-only analysis — works on any imported project, no run needed'}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -241,6 +305,35 @@ export const TestAdvisorPage: React.FC<{
         />
       </div>
 
+      {applyError && (
+        <div className="p-3 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs flex items-center justify-between gap-3">
+          <span>{applyError}</span>
+          <button onClick={() => setApplyError(null)} className="text-rose-200 hover:text-white font-semibold">Dismiss</button>
+        </div>
+      )}
+
+      {applications.length > 0 && (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-1.5">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-emerald-400 flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Wrote to spec this session ({applications.length})
+          </div>
+          {applications.map((a) => (
+            <div key={a.id} className="flex items-center justify-between gap-3 text-[11px] text-emerald-100/90">
+              <span className="truncate min-w-0" title={a.title}>
+                <span className="font-mono text-emerald-300">{a.relativePath}</span> — {a.title}
+              </span>
+              <button
+                onClick={() => revertApplication(a)}
+                title="Restore the exact original file contents (byte-identical)"
+                className="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 font-semibold text-[10px]"
+              >
+                <Undo2 className="w-3 h-3" /> Undo
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ── Severity filter ────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 text-[11px]">
         <span className="text-slate-500 font-semibold uppercase tracking-wide">Show:</span>
@@ -295,6 +388,7 @@ export const TestAdvisorPage: React.FC<{
             advice={advice}
             expanded={expandedId === advice.testId}
             onToggle={() => setExpandedId((prev) => (prev === advice.testId ? null : advice.testId))}
+            onApplyFix={applyFix}
           />
         ))}
       </div>
@@ -303,7 +397,7 @@ export const TestAdvisorPage: React.FC<{
         <p className="text-[10px] text-slate-600 flex items-center gap-1.5 pt-1">
           <Gauge className="w-3.5 h-3.5" />
           Ranked by improvement score — critical 50 pts · warning 18 pts · info 5 pts, tie-broken by estimated time
-          saved. Signals: spec source ({data.analyzedCount} files scanned) + latest run per test. Prepared{' '}
+          saved. Signals: spec source only ({data.scannedFiles} files · {data.analyzedCount} tests). Prepared{' '}
           {new Date(data.generatedAt).toLocaleString()}.
         </p>
       )}
@@ -342,7 +436,8 @@ const AdviceCard: React.FC<{
   advice: TestImprovementAdvice;
   expanded: boolean;
   onToggle: () => void;
-}> = ({ rank, advice, expanded, onToggle }) => {
+  onApplyFix: (advice: TestImprovementAdvice, issue: ImprovementIssue) => Promise<ApplyFixResult>;
+}> = ({ rank, advice, expanded, onToggle, onApplyFix }) => {
   const worst = advice.issues.reduce<ImprovementSeverity>(
     (acc, i) => (severityWeight[i.severity] > severityWeight[acc] ? i.severity : acc),
     'info'
@@ -365,9 +460,9 @@ const AdviceCard: React.FC<{
               </div>
             </div>
             <div className="hidden sm:flex items-center gap-2 shrink-0 text-[10px]">
-              <MetaChip label="last run" value={advice.latestDurationMs !== null ? formatMs(advice.latestDurationMs) : '—'} />
-              <MetaChip label="flaky" value={advice.flakyInLatestRun ? 'yes' : 'no'} tone={advice.flakyInLatestRun ? 'amber' : undefined} />
-              <MetaChip label="retries" value={String(advice.retryCount)} tone={advice.retryCount > 0 ? 'amber' : undefined} />
+              <span className="px-2 py-1 rounded-md bg-slate-800/70 border border-pw-border text-slate-300 font-mono">
+                score {advice.score}
+              </span>
               {advice.estimatedTimeSavedMs > 0 && (
                 <span className="px-2 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-semibold">
                   save {formatSaving(advice.estimatedTimeSavedMs)}/run
@@ -392,7 +487,7 @@ const AdviceCard: React.FC<{
       {expanded && (
         <div className="border-t border-pw-border/70 divide-y divide-pw-border/50">
           {advice.issues.map((issue) => (
-            <IssueRow key={issue.id} issue={issue} />
+            <IssueRow key={issue.id} issue={issue} advice={advice} onApplyFix={onApplyFix} />
           ))}
         </div>
       )}
@@ -400,23 +495,12 @@ const AdviceCard: React.FC<{
   );
 };
 
-const MetaChip: React.FC<{ label: string; value: string; tone?: 'rose' | 'amber' }> = ({ label, value, tone }) => (
-  <span
-    className={`px-2 py-1 rounded-md border font-mono ${
-      tone === 'rose'
-        ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-        : tone === 'amber'
-        ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-        : 'bg-slate-800/70 border-pw-border text-slate-300'
-    }`}
-  >
-    <span className="text-slate-500">{label} </span>
-    {value}
-  </span>
-);
-
 /* ── One issue ────────────────────────────────────────────────────────────── */
-const IssueRow: React.FC<{ issue: ImprovementIssue }> = ({ issue }) => {
+const IssueRow: React.FC<{
+  issue: ImprovementIssue;
+  advice: TestImprovementAdvice;
+  onApplyFix: (advice: TestImprovementAdvice, issue: ImprovementIssue) => Promise<ApplyFixResult>;
+}> = ({ issue, advice, onApplyFix }) => {
   const sev = SEVERITY_META[issue.severity];
   return (
     <div className="p-4 pl-6 flex gap-3">
@@ -452,34 +536,119 @@ const IssueRow: React.FC<{ issue: ImprovementIssue }> = ({ issue }) => {
             <p className="text-[11px] text-emerald-100/90 leading-snug">{issue.impact}</p>
           </div>
         </div>
-        {issue.fix && <FixBlock fix={issue.fix} />}
+        {issue.fix && <FixBlock fix={issue.fix} issue={issue} advice={advice} onApplyFix={onApplyFix} />}
       </div>
     </div>
   );
 };
 
-/* ── Exact before → after code change ─────────────────────────────────────── */
-const FixBlock: React.FC<{ fix: NonNullable<ImprovementIssue['fix']> }> = ({ fix }) => (
-  <div className="mt-2 rounded-lg border border-violet-500/25 bg-violet-500/5 overflow-hidden">
-    <div className="px-2.5 pt-2 text-[9px] font-bold uppercase tracking-widest text-violet-300 flex items-center justify-between">
-      <span>Exact change to apply</span>
-      {fix.note && <span className="normal-case font-medium text-slate-500 tracking-normal text-[9px]">see note</span>}
+/* ── Exact before → after code change + one-click Apply ───────────────────── */
+const FixBlock: React.FC<{
+  fix: AdviceFix;
+  issue: ImprovementIssue;
+  advice: TestImprovementAdvice;
+  onApplyFix: (advice: TestImprovementAdvice, issue: ImprovementIssue) => Promise<ApplyFixResult>;
+}> = ({ fix, issue, advice, onApplyFix }) => {
+  const [confirming, setConfirming] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const pairs: Array<{ before?: string; after: string }> = fix.replacements?.length
+    ? fix.replacements.map((part) => ({ before: part.before, after: part.after }))
+    : fix.after !== undefined
+    ? [{ before: fix.before, after: fix.after }]
+    : [];
+  const applicable = pairs.some((pair) => !!pair.before) || fix.insertAtEndOfTest === true;
+
+  const lines = (text?: string) => (text ? text.split('\n') : []);
+  const Minus = ({ line }: { line: string }) => (
+    <div className="flex gap-2 bg-rose-500/10 border-l-2 border-rose-500/60 px-2 py-0.5 text-rose-200 whitespace-pre-wrap break-all rounded-sm">
+      <span className="text-rose-400 select-none">-</span>
+      <span>{line}</span>
     </div>
-    <div className="p-2 font-mono text-[10px] leading-relaxed overflow-x-auto">
-      {fix.before &&
-        fix.before.split('\n').map((line, i) => (
-          <div key={`b-${i}`} className="flex gap-2 bg-rose-500/10 border-l-2 border-rose-500/60 px-2 py-0.5 text-rose-200 whitespace-pre-wrap break-all rounded-sm">
-            <span className="text-rose-400 select-none">-</span>
-            <span>{line}</span>
-          </div>
+  );
+  const Plus = ({ line }: { line: string }) => (
+    <div className="flex gap-2 bg-emerald-500/10 border-l-2 border-emerald-500/60 px-2 py-0.5 text-emerald-200 whitespace-pre-wrap break-all rounded-sm">
+      <span className="text-emerald-400 select-none">+</span>
+      <span>{line}</span>
+    </div>
+  );
+
+  const confirmApply = async () => {
+    setBusy(true);
+    setError(null);
+    const res = await onApplyFix(advice, issue);
+    setBusy(false);
+    if (res.ok) {
+      setConfirming(false);
+    } else {
+      setError(res.message || 'The fix was refused.');
+    }
+  };
+
+  return (
+    <div className="mt-2 rounded-lg border border-violet-500/25 bg-violet-500/5 overflow-hidden">
+      <div className="px-2.5 pt-2 flex items-center justify-between gap-2">
+        <span className="text-[9px] font-bold uppercase tracking-widest text-violet-300">
+          {fix.insertAtEndOfTest ? 'Additive change' : fix.replacements?.length ? 'Exact changes to apply' : 'Exact change to apply'}
+        </span>
+        {applicable && !confirming && (
+          <button
+            onClick={() => { setConfirming(true); setError(null); }}
+            title={`Write this change into ${advice.relativePath}`}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-semibold"
+          >
+            <Wand2 className="w-3 h-3" /> Apply fix
+          </button>
+        )}
+      </div>
+
+      <div className="p-2 font-mono text-[10px] leading-relaxed overflow-x-auto">
+        {pairs.map((pair, i) => (
+          <React.Fragment key={i}>
+            {pairs.length > 1 && (
+              <div className="text-[8px] uppercase tracking-widest text-violet-400/70 px-1 pb-0.5 pt-1 first:pt-0 select-none">
+                change {i + 1} of {pairs.length}
+              </div>
+            )}
+            {lines(pair.before).map((line, j) => <Minus key={`b-${j}`} line={line} />)}
+            {lines(pair.after).map((line, j) => <Plus key={`a-${j}`} line={line} />)}
+          </React.Fragment>
         ))}
-      {fix.after.split('\n').map((line, i) => (
-        <div key={`a-${i}`} className="flex gap-2 bg-emerald-500/10 border-l-2 border-emerald-500/60 px-2 py-0.5 text-emerald-200 whitespace-pre-wrap break-all rounded-sm">
-          <span className="text-emerald-400 select-none">+</span>
-          <span>{line}</span>
+      </div>
+
+      {fix.note && <p className="px-2.5 pb-2 text-[9px] text-violet-200/70 leading-snug">{fix.note}</p>}
+
+      {!applicable && (
+        <p className="px-2.5 pb-2 text-[9px] text-slate-500 leading-snug border-t border-violet-500/10 pt-1.5">
+          Structural restructure — no single safe mechanical edit, apply it by hand (the steps above are the script).
+        </p>
+      )}
+
+      {confirming && (
+        <div className="border-t border-violet-500/20 bg-violet-500/10 px-2.5 py-2 flex flex-wrap items-center gap-2">
+          <span className="text-[10px] text-violet-100/90">
+            Write {pairs.length > 1 ? `${pairs.length} changes` : 'this change'} into{' '}
+            <span className="font-mono text-violet-200">{advice.relativePath}</span>? The original file is backed up in the app (Undo available after applying).
+          </span>
+          <button
+            onClick={confirmApply}
+            disabled={busy}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-semibold disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+            {busy ? 'Applying…' : 'Confirm & write'}
+          </button>
+          <button
+            onClick={() => { setConfirming(false); setError(null); }}
+            disabled={busy}
+            className="px-2 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold disabled:opacity-60"
+          >
+            Cancel
+          </button>
         </div>
-      ))}
+      )}
+      {error && <p className="px-2.5 py-1.5 text-[9px] text-rose-300 bg-rose-500/10 border-t border-rose-500/20">{error}</p>}
     </div>
-    {fix.note && <p className="px-2.5 pb-2 text-[9px] text-violet-200/70 leading-snug">{fix.note}</p>}
-  </div>
-);
+  );
+};

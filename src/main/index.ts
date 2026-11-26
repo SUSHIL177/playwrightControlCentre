@@ -14,6 +14,7 @@ import { SettingsService } from './services/SettingsService';
 import { ArtifactCatalogService } from './services/ArtifactCatalogService';
 import { SpecAnalysisService } from './services/SpecAnalysisService';
 import { ImprovementAdvisorService } from './services/ImprovementAdvisorService';
+import { runHealthService } from './services/RunHealthService';
 import { LocalBridgeServer } from './server/LocalBridgeServer';
 import { configureElectronUserData } from './platform/tenant';
 import { GitImportRequest } from '../shared/types';
@@ -328,6 +329,22 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC.INTEL_IMPROVE, (_, projectId: string) => {
     return improvementAdvisorService.analyze(projectId);
+  });
+
+  ipcMain.handle(IPC.INTEL_APPLY_FIX, (_, req: import('../shared/types').ApplyFixRequest) => {
+    return improvementAdvisorService.applyFix(req);
+  });
+
+  ipcMain.handle(IPC.INTEL_REVERT_FIX, (_, applicationId: string) => {
+    return improvementAdvisorService.revertFix(applicationId);
+  });
+
+  ipcMain.handle(IPC.INTEL_GET_HEALTH, () => {
+    return runHealthService.snapshot();
+  });
+
+  ipcMain.handle(IPC.INTEL_GET_BATCH_HEALTH, (_, projectId: string, batchId?: string) => {
+    return runHealthService.getBatchHealth(projectId, batchId);
   });
 
   ipcMain.handle(IPC.SCHEDULER_LIST, () => {

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Play, RotateCcw, Square } from 'lucide-react';
 import { BrowserType, ExecutionBatch, ProjectConfig } from '@shared/types';
+import { RunHealthStrip } from '../components/RunHealthStrip';
 
 export const ExecutionCenterPage: React.FC<{
   project: ProjectConfig | null;
@@ -26,7 +27,10 @@ export const ExecutionCenterPage: React.FC<{
     <div className="p-6 space-y-6 max-w-5xl">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-white">Test Execution Center</h1>
+          <h1 className="text-xl font-bold text-white flex items-center gap-3">
+            Test Execution Center
+            {isRunning && <RunHealthStrip active />}
+          </h1>
           <p className="text-xs text-slate-400 mt-0.5">
             Runtime overrides apply strictly to this process without mutating your original playwright.config.ts.
           </p>

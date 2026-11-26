@@ -356,9 +356,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                   <YAxis stroke="#64748B" fontSize={10} allowDecimals={false} />
                   <Tooltip
                     labelFormatter={(_, payload) => payload?.[0]?.payload?.rangeLabel ?? ''}
-                    contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px' }}
+                    contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px', borderRadius: '8px' }}
+                    itemStyle={{ color: '#E2E8F0' }}
+                    labelStyle={{ color: '#F8FAFC', fontWeight: 700 }}
                   />
-                  <Legend wrapperStyle={{ fontSize: '11px' }} />
+                  <Legend wrapperStyle={{ fontSize: '11px', color: '#CBD5E1' }} />
                   <Bar dataKey="passed" name="Passed" fill="#10B981" radius={[4, 4, 0, 0]} stackId="r" />
                   <Bar dataKey="failed" name="Failed" fill="#F43F5E" radius={[4, 4, 0, 0]} stackId="r" />
                 </BarChart>
@@ -376,7 +378,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                   <YAxis domain={[0, 100]} stroke="#64748B" fontSize={10} />
                   <Tooltip
                     labelFormatter={(_, payload) => payload?.[0]?.payload?.rangeLabel ?? ''}
-                    contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px' }}
+                    contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px', borderRadius: '8px' }}
+                    itemStyle={{ color: '#E2E8F0' }}
+                    labelStyle={{ color: '#F8FAFC', fontWeight: 700 }}
                   />
                   <Line type="monotone" dataKey="passPct" name="Pass %" stroke="#38BDF8" strokeWidth={2.5} dot={{ r: 3 }} connectNulls />
                 </LineChart>
@@ -442,8 +446,12 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                         <Cell key={i} fill={entry.color} />
                       ))}
                     </Pie>
-                    <Tooltip contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px' }} />
-                    <Legend wrapperStyle={{ fontSize: '12px' }} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px', borderRadius: '8px' }}
+                      itemStyle={{ color: '#E2E8F0' }}
+                      labelStyle={{ color: '#F8FAFC', fontWeight: 700, marginBottom: 2 }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: '12px', color: '#CBD5E1' }} />
                   </PieChart>
                 </ResponsiveContainer>
               )}
@@ -474,7 +482,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                     <CartesianGrid strokeDasharray="3 3" stroke="#1E293B" />
                     <XAxis type="number" allowDecimals={false} stroke="#64748B" fontSize={11} />
                     <YAxis type="category" dataKey="name" width={150} stroke="#94A3B8" fontSize={10} />
-                    <Tooltip contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px' }} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#0F172A', borderColor: '#334155', fontSize: '12px', borderRadius: '8px' }}
+                      itemStyle={{ color: '#E2E8F0' }}
+                      labelStyle={{ color: '#F8FAFC', fontWeight: 700, marginBottom: 2 }}
+                    />
                     <Bar dataKey="value" name="Failures" fill="#F43F5E" radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -522,30 +534,30 @@ const FlipKpiCard: React.FC<FlipKpiCardProps> = ({ label, icon, frontValue, fron
     <div className="kpi-flip-inner">
       {/* Front — latest execution */}
       <div className="kpi-flip-face bg-pw-panel border border-pw-border p-3 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between gap-2 text-[11px] leading-none text-slate-400">
-          <span className="flex items-center gap-1.5 min-w-0" title={label}>
-            <span className="shrink-0">{icon}</span>
-            <span className="truncate">{label}</span>
-          </span>
-          <span className="text-[8px] font-bold tracking-widest text-sky-400 bg-sky-500/10 border border-sky-500/30 rounded px-1.5 py-0.5 shrink-0">
+        <div className="flex items-center gap-1.5 text-[11px] leading-none text-slate-400 min-h-[16px]" title={label}>
+          <span className="shrink-0">{icon}</span>
+          <span className="truncate">{label}</span>
+        </div>
+        <div className="mt-auto flex items-end justify-between gap-2">
+          <div className="text-2xl font-bold text-white leading-none tabular-nums">{frontValue}</div>
+          <span className="text-[8px] font-bold tracking-widest text-sky-400 bg-sky-500/10 border border-sky-500/30 rounded px-1.5 py-0.5 shrink-0 mb-0.5">
             LATEST
           </span>
         </div>
-        <div className="text-2xl font-bold text-white mt-auto leading-none tabular-nums">{frontValue}</div>
         <div className="text-[9px] leading-tight text-slate-500 mt-1 truncate" title={frontCaption}>{frontCaption}</div>
       </div>
       {/* Back — all-time totals */}
       <div className="kpi-flip-face kpi-flip-back bg-pw-navy border border-sky-900/60 p-3 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between gap-2 text-[11px] leading-none text-slate-400">
-          <span className="flex items-center gap-1.5 min-w-0" title={label}>
-            <span className="shrink-0">{icon}</span>
-            <span className="truncate">{label}</span>
-          </span>
-          <span className="text-[8px] font-bold tracking-widest text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 rounded px-1.5 py-0.5 shrink-0">
+        <div className="flex items-center gap-1.5 text-[11px] leading-none text-slate-400 min-h-[16px]" title={label}>
+          <span className="shrink-0">{icon}</span>
+          <span className="truncate">{label}</span>
+        </div>
+        <div className="mt-auto flex items-end justify-between gap-2">
+          <div className="text-2xl font-bold text-sky-100 leading-none tabular-nums">{backValue}</div>
+          <span className="text-[8px] font-bold tracking-widest text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 rounded px-1.5 py-0.5 shrink-0 mb-0.5">
             ALL TIME
           </span>
         </div>
-        <div className="text-2xl font-bold text-sky-100 mt-auto leading-none tabular-nums">{backValue}</div>
         <div className="text-[9px] leading-tight text-slate-500 mt-1 truncate" title={backCaption}>{backCaption}</div>
       </div>
     </div>

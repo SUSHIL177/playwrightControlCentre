@@ -14,6 +14,7 @@ const ipcChannels_1 = require("../../shared/ipcChannels");
 const db_1 = require("../database/db");
 const pathSecurity_1 = require("../utils/pathSecurity");
 const effectiveConfig_1 = require("./effectiveConfig");
+const RunHealthService_1 = require("./RunHealthService");
 const ANSI_STRIP = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 /**
  * Runs are tracked per tenant (web mode: one entry per end user; desktop: a single
@@ -264,6 +265,8 @@ class ExecutionEngineService {
             shell: !useDirectNode && process.platform === 'win32',
         });
         this.activeRuns.set(tenantKey, { child, executionId });
+        // Host health sampling — aggregates persist when the batch closes.
+        RunHealthService_1.runHealthService.start(executionId, project.id);
         let spawnErrorHandled = false;
         // A failed spawn (missing node/npx, bad cwd, EMFILE …) never emits 'close' on some platforms.
         // Surface it as a failed batch + completion event so the UI never gets stuck in "EXECUTING".
@@ -275,6 +278,7 @@ class ExecutionEngineService {
             const current = this.activeRuns.get(tenantKey);
             if (current?.child === child)
                 this.activeRuns.delete(tenantKey);
+            RunHealthService_1.runHealthService.finish(executionId);
             const endTime = new Date().toISOString();
             const durationMs = Math.max(0, new Date(endTime).getTime() - new Date(startTime).getTime());
             db.prepare(`UPDATE execution_batches SET status = 'failed', end_time = ?, duration_ms = ? WHERE id = ?`).run(endTime, durationMs, executionId);
@@ -539,6 +543,7 @@ class ExecutionEngineService {
             }
         });
         tx();
+        RunHealthService_1.runHealthService.finish(executionId);
         const row = db.prepare('SELECT * FROM execution_batches WHERE id = ?').get(executionId);
         return this.mapBatchRow(row);
     }
