@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   Wand2,
   Undo2,
+  BookOpenCheck,
 } from 'lucide-react';
 import {
   ImprovementAdvisorResult,
@@ -78,10 +79,13 @@ function buildExportMarkdown(data: ImprovementAdvisorResult): string {
     '# Test Improvement Report',
     `Generated: ${new Date(data.generatedAt).toLocaleString()}`,
     `Signals: static analysis of the imported project source (no execution data) · ${data.scannedFiles} spec files scanned · ${data.analyzedCount} test blocks`,
+    data.style
+      ? `Detected project style: ${data.style.pomDetected ? `Page Object Model (${data.style.pomFiles} page object${data.style.pomFiles === 1 ? '' : 's'})` : 'flat specs (no page objects found)'} · prefers ${data.style.preferredLocator}${data.style.customFixtures ? ' · custom fixtures' : ''}`
+      : '',
     `Analyzed: ${data.analyzedCount} tests · Flagged: ${data.summary.flaggedTests} · Critical: ${data.summary.critical} · Warning: ${data.summary.warning} · Info: ${data.summary.info}`,
     `Estimated saving per run: ${formatSaving(data.summary.totalEstimatedTimeSavedMs)}`,
     '',
-  ];
+  ].filter((line) => line !== '');
   for (const t of data.tests) {
     lines.push(`## ${t.testTitle}`);
     lines.push(`\`${t.relativePath}:${t.line}\` — score ${t.score}`);
@@ -240,6 +244,17 @@ export const TestAdvisorPage: React.FC<{
               ? `Source-only analysis — ${data.scannedFiles} spec files scanned · ${data.analyzedCount} test blocks`
               : 'Source-only analysis — works on any imported project, no run needed'}
           </p>
+          {data?.style && (
+            <p
+              className="text-[10px] mt-1.5 inline-flex items-center gap-1.5 font-semibold text-violet-300/90 bg-violet-500/10 border border-violet-500/25 rounded-md px-2 py-0.5"
+              title="Recommendations are written in this style — locator examples follow what your project actually uses"
+            >
+              <BookOpenCheck className="w-3 h-3" />
+              {data.style.pomDetected
+                ? `POM detected · ${data.style.pomFiles} page object${data.style.pomFiles === 1 ? '' : 's'} · prefers ${data.style.preferredLocator}${data.style.customFixtures ? ' · custom fixtures' : ''}`
+                : `No page objects found · prefers ${data.style.preferredLocator}${data.style.customFixtures ? ' · custom fixtures' : ''}`}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button
@@ -621,7 +636,7 @@ const FixBlock: React.FC<{
 
       {!applicable && (
         <p className="px-2.5 pb-2 text-[9px] text-slate-500 leading-snug border-t border-violet-500/10 pt-1.5">
-          Structural restructure — no single safe mechanical edit, apply it by hand (the steps above are the script).
+          Guidance only — no single safe mechanical edit for this one; apply it by hand (the steps and note above are the script).
         </p>
       )}
 

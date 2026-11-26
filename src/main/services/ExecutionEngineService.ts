@@ -1,6 +1,7 @@
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import type { BrowserWindow } from 'electron';
 import { executionsRoot, isWebTenant, tenantContext } from '../platform/tenant';
 import { randomUUID as uuidv4 } from 'crypto';
@@ -63,6 +64,8 @@ export class ExecutionEngineService {
       durationMs: row.duration_ms,
       htmlReportPath: row.html_report_path,
       jsonReportPath: row.json_report_path,
+      workers: row.workers ?? null,
+      workersSource: (row.workers_source as 'requested' | 'auto' | null) ?? null,
     };
   }
 
@@ -165,6 +168,11 @@ export class ExecutionEngineService {
     ensureDirSync(testOutputDir);
 
     const browsers: BrowserType[] = options.browsers.length > 0 ? options.browsers : ['chromium'];
+    // Effective worker count for this run: an explicit setting wins; otherwise Playwright's
+    // own default applies (50% of the logical cores) which we reproduce for reporting.
+    const workersRequested = options.workers && options.workers > 0 ? Math.floor(options.workers) : null;
+    const workersEffective = workersRequested ?? Math.max(1, Math.floor(os.cpus().length / 2));
+    const workersSource: 'requested' | 'auto' = workersRequested ? 'requested' : 'auto';
     const startTime = new Date().toISOString();
     const description =
       options.description ||
@@ -189,14 +197,16 @@ export class ExecutionEngineService {
       durationMs: 0,
       htmlReportPath: path.join(htmlReportDir, 'index.html'),
       jsonReportPath: jsonReportFile,
+      workers: workersEffective,
+      workersSource,
     };
 
     db.prepare(`
       INSERT INTO execution_batches (
         id, project_id, description, mode, environment, browsers, tag, status,
         total_tests, passed, failed, skipped, timed_out, flaky, start_time,
-        duration_ms, html_report_path, json_report_path
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?, 0, ?, ?)
+        duration_ms, html_report_path, json_report_path, workers, workers_source
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, ?, 0, ?, ?, ?, ?)
     `).run(
       batch.id,
       batch.projectId,
@@ -208,7 +218,9 @@ export class ExecutionEngineService {
       batch.status,
       batch.startTime,
       batch.htmlReportPath,
-      batch.jsonReportPath
+      batch.jsonReportPath,
+      workersEffective,
+      workersSource
     );
 
     let effectiveConfig: ReturnType<typeof writeEffectiveConfig> = null;
@@ -309,7 +321,8 @@ export class ExecutionEngineService {
       const overrideLine = effectiveConfig
         ? `[Control Center] Browsers pinned to: ${browsers.join(', ')} (overriding playwright.config.ts projects)\n`
         : `[Control Center] Browsers: ${browsers.join(', ')} (project config used as-is)\n`;
-      emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n[Working Directory] ${project.root_path}\n${overrideLine}`);
+      const workersLine = `[Workers] ${workersEffective} (${workersSource === 'requested' ? 'run setting' : 'Playwright default ≈ 50% of cores'})\n`;
+      emitLog('system', `[Control Center] Starting Execution ${executionId}\n[Report Output] ${htmlReportDir}\n[Working Directory] ${project.root_path}\n${overrideLine}${workersLine}`);
 
     } catch (err) {
       effectiveConfig?.cleanup();

@@ -341,6 +341,15 @@ function runMigrations(db) {
       ended_at TEXT NOT NULL
     );
   `);
+    // Column migrations for installs created before the columns existed
+    // (SQLite has no ADD COLUMN IF NOT EXISTS).
+    const batchCols = db.prepare('PRAGMA table_info(execution_batches)').all();
+    if (!batchCols.some((c) => c.name === 'workers')) {
+        db.exec('ALTER TABLE execution_batches ADD COLUMN workers INTEGER');
+    }
+    if (!batchCols.some((c) => c.name === 'workers_source')) {
+        db.exec('ALTER TABLE execution_batches ADD COLUMN workers_source TEXT');
+    }
     db.prepare(`UPDATE execution_batches SET status = 'stopped', end_time = ? WHERE status = 'running'`)
         .run(new Date().toISOString());
 }

@@ -93,17 +93,24 @@ const RunHealthPanel: React.FC<{
         <span className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Run health — automation impact</span>
         <span className="text-[9px] text-slate-600">host CPU/RAM sampled every 2s while this batch ran</span>
       </div>
+      {health === null && (
+        <div className="rounded-lg border border-pw-border/60 bg-pw-navy/40 px-3 py-2 mb-2 text-[10px] text-slate-500">
+          No host samples were captured for this batch (it ran before capture existed, or the sampler could not start) — workers, duration, throughput and retries are still shown.
+        </div>
+      )}
       {health === undefined ? (
         <div className="pacc-shimmer h-14 rounded-lg border border-pw-border/60" />
-      ) : health === null ? (
-        <div className="rounded-lg border border-pw-border/60 bg-pw-navy/40 px-3 py-2 text-[10px] text-slate-500">
-          No health samples were captured for this batch (it ran before capture existed, or the sampler could not start). Duration and throughput below are still available.
-        </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
-          <Tile label="CPU avg" value={health.cpuAvgPercent !== null ? `${health.cpuAvgPercent.toFixed(0)}%` : '—'} sub={`peak ${health.cpuPeakPercent !== null ? health.cpuPeakPercent.toFixed(0) : '—'}%`} tone={health.cpuPeakPercent !== null && health.cpuPeakPercent >= 85 ? 'text-amber-300' : 'text-emerald-300'} />
-          <Tile label="RAM avg" value={health.memAvgMb !== null ? `${(health.memAvgMb / 1024).toFixed(1)} GB` : '—'} sub={`peak ${health.memPeakMb !== null ? (health.memPeakMb / 1024).toFixed(1) : '—'} of ${(health.memTotalMb / 1024).toFixed(0)} GB`} tone={health.memPeakMb !== null && health.memPeakMb / health.memTotalMb > 0.9 ? 'text-amber-300' : 'text-sky-300'} />
-          <Tile label="Load (1m) peak" value={health.load1Peak.toFixed(1)} tone="text-slate-200" />
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+          <Tile
+            label="Workers"
+            value={batch.workers != null ? String(batch.workers) : 'auto'}
+            sub={batch.workers == null ? 'not recorded' : batch.workersSource === 'requested' ? 'run setting' : 'Playwright default ≈ ½ cores'}
+            tone="text-cyan-300"
+          />
+          <Tile label="CPU avg" value={health && health.cpuAvgPercent !== null ? `${health.cpuAvgPercent.toFixed(0)}%` : '—'} sub={health ? `peak ${health.cpuPeakPercent !== null ? health.cpuPeakPercent.toFixed(0) : '—'}%` : 'no samples'} tone={health && health.cpuPeakPercent !== null && health.cpuPeakPercent >= 85 ? 'text-amber-300' : 'text-emerald-300'} />
+          <Tile label="RAM avg" value={health && health.memAvgMb !== null ? `${(health.memAvgMb / 1024).toFixed(1)} GB` : '—'} sub={health ? `peak ${health.memPeakMb !== null ? (health.memPeakMb / 1024).toFixed(1) : '—'} of ${(health.memTotalMb / 1024).toFixed(0)} GB` : 'no samples'} tone={health && health.memPeakMb !== null && health.memPeakMb / health.memTotalMb > 0.9 ? 'text-amber-300' : 'text-sky-300'} />
+          <Tile label="Load (1m) peak" value={health ? health.load1Peak.toFixed(1) : '—'} tone="text-slate-200" />
           <Tile label="Duration" value={formatMinutes(batch.durationMs)} sub="wall-clock" tone="text-slate-100" />
           <Tile label="Throughput" value={throughput !== null ? `${throughput} t/min` : '—'} sub={`${batch.totalTests} tests`} tone="text-violet-300" />
           <Tile label="Retries burned" value={retriesBurned !== null ? String(retriesBurned) : '—'} sub={`${batch.flaky} flaky`} tone={retriesBurned ? 'text-amber-300' : 'text-slate-100'} />

@@ -60,6 +60,8 @@ const BATCH = {
   durationMs: 140000,
   htmlReportPath: '/tmp/report/index.html',
   jsonReportPath: '/tmp/report/results.json',
+  workers: 4,
+  workersSource: 'requested',
 };
 
 const SPEC_PATH = '/fixture/tests/checkout.spec.ts';
@@ -166,6 +168,7 @@ console.error = (...args) => { if (!String(args[0]).includes('Warning')) process
 // ── Mock bridge ──────────────────────────────────────────────────────────────
 const healingProgressCbs = new Set();
 const executionCompletedCbs = new Set();
+const terminalLogCbs = new Set();
 const previewCalls = [];
 const startExecutionCalls = [];
 let advisorCalls = 0;
@@ -213,6 +216,7 @@ const mock = {
             fix: { after: "await expect(page.getByText('Order placed')).toBeVisible();", insertAtEndOfTest: true, note: 'Inserted before the closing brace.' } },
         ],
       }],
+      style: { pomDetected: true, pomFiles: 3, preferredLocator: 'getByTestId', customFixtures: false },
       summary: { flaggedTests: 1, critical: 1, warning: 1, info: 0, totalEstimatedTimeSavedMs: 2500 },
     };
   },
@@ -225,7 +229,7 @@ const mock = {
   startExecution: async (opts) => { startExecutionCalls.push(opts); return { executionId: BATCH.id }; },
   stopExecution: async () => undefined,
   getActiveExecutionStatus: async () => ({ running: false }),
-  onTerminalLog: () => () => {},
+  onTerminalLog: (cb) => { terminalLogCbs.add(cb); return () => terminalLogCbs.delete(cb); },
   onExecutionCompleted: (cb) => { executionCompletedCbs.add(cb); return () => executionCompletedCbs.delete(cb); },
   onHealingProgress: (cb) => { healingProgressCbs.add(cb); return () => healingProgressCbs.delete(cb); },
   listExecutionBatches: async () => [BATCH],
@@ -308,6 +312,13 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
   check('Weekly Analytics panel renders with range presets', bodyText().includes('Weekly Analytics') && ['2W', '4W', '8W', '12W'].every((t) => bodyText().includes(t)));
   check('Weekly table lists week rows', /Week\s*Runs\s*Executed\s*Passed/i.test(bodyText()));
 
+  // A stale chunk from a previous run must be visible first, then cleared when a new run starts
+  for (const cb of terminalLogCbs) {
+    cb({ executionId: 'RUN-OLD', stream: 'stdout', text: 'STALE_LOG_MARKER: output from a previous run\n', timestamp: new Date().toISOString() });
+  }
+  await flush(150);
+  check('previous run output renders in the live terminal', /STALE_LOG_MARKER/.test(bodyText()));
+
   // Run Full Regression → workers modal instead of hardcoded 4
   const quickRunBtn = findButton('Run Full Regression');
   check('Run Full Regression button present', !!quickRunBtn);
@@ -324,6 +335,7 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
     const startBtn = findButton('Start Regression Run');
     check('confirm button reflects chosen worker count', !!startBtn && /\(8 workers · /.test(startBtn.textContent || ''));
     if (startBtn) { click(startBtn); await flush(200); }
+    check('previous run logs are cleared when the new execution starts', !/STALE_LOG_MARKER/.test(bodyText()));
     check('batch launches with the selected workers (not a hardcoded 4)', startExecutionCalls.length > 0 && startExecutionCalls[startExecutionCalls.length - 1].workers === 8);
     check('batch launches with the selected browsers (chromium + firefox override)', startExecutionCalls.length > 0 && JSON.stringify(startExecutionCalls[startExecutionCalls.length - 1].browsers) === JSON.stringify(['chromium', 'firefox']));
     check('live host-health strip shows CPU/RAM while running', /CPU 42%/.test(bodyText()) && /RAM 8.0\/16 GB/.test(bodyText()));
@@ -363,6 +375,7 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
   const expandHistoryBatch = window.document.querySelector('button[title="Expand per-test results"]');
   if (expandHistoryBatch) { click(expandHistoryBatch); await flush(350); }
   check('batch detail shows the Run health panel with CPU/RAM stats', /Run health/i.test(bodyText()) && /CPU avg/i.test(bodyText()) && /RAM avg/i.test(bodyText()) && /Throughput/i.test(bodyText()));
+  check('batch detail shows the per-run worker count', /Workers/i.test(bodyText()) && /run setting/i.test(bodyText()));
 
   // Artifacts — and the fresh-preview fix: a rescan must refire the preview fetch
   nav('Test Artifacts'); await flush(500);
@@ -425,6 +438,7 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
   nav('Test Advisor'); await flush(250);
   check('Test Advisor renders ranked findings', /checkout flow/.test(bodyText()) && /hard-coded wait/i.test(bodyText()));
   check('advisor scopes analysis to imported project source (no run data)', /Source-only analysis/.test(bodyText()) && bodyText().includes('3 spec files'));
+  check('advisor shows the detected project style (POM + locator idiom)', /POM detected/.test(bodyText()) && /getByTestId/.test(bodyText()));
   check('advisor carries no execution-telemetry copy', !/latest execution per test/i.test(bodyText()) && !bodyText().includes('Flaky rate'));
   check('advisor has Export report (.md) and no Copy report', !!findButton('Export report') && !findButton('Copy report'));
   const advisorCallsBefore = advisorCalls;
