@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  BrowserType,
   DiscoveredTest,
   ExecutionBatch,
   FailureAnalysisRecord,
@@ -23,6 +24,7 @@ import { ReportsCenterPage } from './pages/ReportsCenterPage';
 import { ExecutionHistoryPage } from './pages/ExecutionHistoryPage';
 import { ArtifactsPage } from './pages/ArtifactsPage';
 import { FlakyAndPerformancePage, SchedulerPage, SettingsPage } from './pages/IntelligenceAndSchedulerPages';
+import { TestAdvisorPage } from './pages/TestAdvisorPage';
 
 async function safeInvoke<T>(label: string, promise: Promise<T>, fallback: T): Promise<T> {
   try {
@@ -249,10 +251,10 @@ export default function App() {
               onRefresh={async () => {
                 if (activeProject) await loadProjectData(activeProject.id);
               }}
-              onQuickRun={(workers: number) =>
+              onQuickRun={(workers: number, browsers: BrowserType[]) =>
                 handleStartExecution({
                   mode: 'full',
-                  browsers: ['chromium'],
+                  browsers,
                   headed: false,
                   workers,
                   description: 'Full Regression Suite',
@@ -326,8 +328,12 @@ export default function App() {
             />
           )}
 
-          {(route === 'flaky' || route === 'cross-browser' || route === 'performance') && (
+          {(route === 'flaky' || route === 'cross-browser') && (
             <FlakyAndPerformancePage mode={route} project={activeProject} refreshKey={executionVersion} />
+          )}
+
+          {route === 'improve' && (
+            <TestAdvisorPage project={activeProject} refreshKey={executionVersion} />
           )}
 
           {route === 'scheduler' && <SchedulerPage project={activeProject} refreshKey={executionVersion} />}
@@ -338,10 +344,10 @@ export default function App() {
               onRefresh={async () => {
                 if (activeProject) await loadProjectData(activeProject.id);
               }}
-              onRunSuite={(workers: number) =>
+              onRunSuite={(workers: number, browsers: BrowserType[]) =>
                 handleStartExecution({
                   mode: 'full',
-                  browsers: ['chromium'],
+                  browsers,
                   headed: false,
                   workers,
                   description: 'Full Regression Suite',

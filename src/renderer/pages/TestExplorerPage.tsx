@@ -10,8 +10,19 @@ import {
   Square,
   Tag,
   RefreshCw,
+  ListTree,
+  Navigation,
+  Keyboard,
+  MousePointerClick,
+  Hourglass,
+  CheckCircle2,
+  Layers,
+  Loader2,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { BrowserType, DiscoveredTest, FolderNode, ProjectConfig } from '@shared/types';
+import { TestStepsResult, SpecStepKind } from '@shared/specAnalysis';
 
 interface TestExplorerPageProps {
   project: ProjectConfig | null;
@@ -48,6 +59,42 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
   const [workers, setWorkers] = useState<number>(4);
   const [scanning, setScanning] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  /** Inline step viewer — testId → fetch state. */
+  const [stepsState, setStepsState] = useState<Record<string, { loading: boolean; error?: string; data?: TestStepsResult }>>({});
+  const [copiedBlock, setCopiedBlock] = useState<string | null>(null);
+
+  const toggleSteps = (test: DiscoveredTest) => {
+    if (!project) return;
+    setStepsState((prev) => {
+      const current = prev[test.id];
+      if (current?.data || current?.error || current?.loading) {
+        // collapse if already expanded, or retry if errored
+        if (current.loading) return prev;
+        const next = { ...prev };
+        if (current.error) {
+          next[test.id] = { loading: true };
+          void loadSteps(project.id, test.id);
+          return next;
+        }
+        delete next[test.id];
+        return next;
+      }
+      void loadSteps(project.id, test.id);
+      return { ...prev, [test.id]: { loading: true } };
+    });
+  };
+
+  const loadSteps = async (projectId: string, testId: string) => {
+    try {
+      const data: TestStepsResult = await window.pwControlCenter.getTestSteps(projectId, testId);
+      setStepsState((prev) => ({ ...prev, [testId]: { loading: false, data } }));
+    } catch (err: any) {
+      setStepsState((prev) => ({
+        ...prev,
+        [testId]: { loading: false, error: err?.message || 'Failed to load the test steps.' },
+      }));
+    }
+  };
 
   // Automatically trigger discovery once per project if it has 0 cached tests.
   useEffect(() => {
@@ -421,7 +468,7 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
                 <th className="p-2.5 text-right">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-pw-border/50">
+            <tbody className="divide-y divide-pw-border/50 pacc-rows">
               {displayedTests.length === 0 && (
                 <tr>
                   <td colSpan={6} className="p-8 text-center text-slate-500">
@@ -434,13 +481,31 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
               {displayedTests.map((t) => {
                 const checked = selectedTestIds.has(t.id);
                 return (
-                  <tr key={t.id} className="hover:bg-slate-800/40">
+                  <React.Fragment key={t.id}>
+                  <tr className="hover:bg-slate-800/40">
                     <td className="p-2.5">
                       <button onClick={() => toggleSelectTest(t.id)} className="text-slate-400 hover:text-sky-400">
                         {checked ? <CheckSquare className="w-4 h-4 text-sky-400" /> : <Square className="w-4 h-4" />}
                       </button>
                     </td>
-                    <td className="p-2.5 font-medium text-slate-100">{t.fullTitle}</td>
+                    <td className="p-2.5 font-medium text-slate-100">
+                      <button
+                        onClick={() => toggleSteps(t)}
+                        aria-expanded={stepsState[t.id] !== undefined && !stepsState[t.id]?.loading && !!stepsState[t.id]?.data}
+                        title="Show the steps implemented in this test case"
+                        className="group flex items-center gap-1.5 text-left hover:text-sky-300 transition-colors max-w-md"
+                      >
+                        {stepsState[t.id] && !stepsState[t.id]?.data && stepsState[t.id]?.loading ? (
+                          <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-sky-400" />
+                        ) : stepsState[t.id]?.data ? (
+                          <ChevronDown className="w-3.5 h-3.5 shrink-0 text-sky-400" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5 shrink-0 text-slate-600 group-hover:text-sky-400 transition-colors" />
+                        )}
+                        <span className="truncate">{t.fullTitle}</span>
+                        <ListTree className="w-3.5 h-3.5 shrink-0 text-slate-600 group-hover:text-sky-400 transition-colors" />
+                      </button>
+                    </td>
                     <td className="p-2.5 font-mono text-[11px] text-slate-400">
                       {t.relativePath}:{t.line}
                     </td>
@@ -477,6 +542,39 @@ export const TestExplorerPage: React.FC<TestExplorerPageProps> = ({
                       </button>
                     </td>
                   </tr>
+                  {stepsState[t.id] && (
+                    <tr className="bg-slate-900/70 border-b border-pw-border/60">
+                      <td colSpan={6} className="p-0">
+                        <TestStepsPanel
+                          test={t}
+                          state={stepsState[t.id]}
+                          onRun={() =>
+                            onExecute({ mode: 'tests', testIds: [t.id], browsers, headed, workers })
+                          }
+                          copied={copiedBlock === t.id}
+                          onCopy={() => {
+                            const data = stepsState[t.id]?.data;
+                            if (!data) return;
+                            navigator.clipboard?.writeText(data.source).then(
+                              () => {
+                                setCopiedBlock(t.id);
+                                window.setTimeout(() => setCopiedBlock(null), 1500);
+                              },
+                              () => setCopiedBlock(null)
+                            );
+                          }}
+                          onClose={() =>
+                            setStepsState((prev) => {
+                              const next = { ...prev };
+                              delete next[t.id];
+                              return next;
+                            })
+                          }
+                        />
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -500,5 +598,125 @@ const StatusBadge: React.FC<{ status?: string }> = ({ status }) => {
     <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${styles[status] || styles.skipped}`}>
       {status}
     </span>
+  );
+};
+
+/* ── Inline steps viewer ─────────────────────────────────────────────────── */
+const STEP_KIND_META: Record<SpecStepKind, { icon: React.ReactNode; label: string; cls: string }> = {
+  step: { icon: <Layers className="w-3 h-3" />, label: 'STEP', cls: 'text-violet-300 bg-violet-500/15 border-violet-500/30' },
+  navigation: { icon: <Navigation className="w-3 h-3" />, label: 'NAV', cls: 'text-sky-300 bg-sky-500/15 border-sky-500/30' },
+  input: { icon: <Keyboard className="w-3 h-3" />, label: 'INPUT', cls: 'text-amber-300 bg-amber-500/15 border-amber-500/30' },
+  action: { icon: <MousePointerClick className="w-3 h-3" />, label: 'ACTION', cls: 'text-cyan-300 bg-cyan-500/15 border-cyan-500/30' },
+  wait: { icon: <Hourglass className="w-3 h-3" />, label: 'WAIT', cls: 'text-orange-300 bg-orange-500/15 border-orange-500/30' },
+  assertion: { icon: <CheckCircle2 className="w-3 h-3" />, label: 'ASSERT', cls: 'text-emerald-300 bg-emerald-500/15 border-emerald-500/30' },
+};
+
+const TestStepsPanel: React.FC<{
+  test: DiscoveredTest;
+  state: { loading: boolean; error?: string; data?: TestStepsResult };
+  onRun: () => void;
+  onClose: () => void;
+  onCopy: () => void;
+  copied: boolean;
+}> = ({ test, state, onRun, onClose, onCopy, copied }) => {
+  const { data, error, loading } = state;
+
+  return (
+    <div className="pacc-fade-in border-l-2 border-sky-500/50">
+      {/* header */}
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-pw-border/60 bg-slate-900/40">
+        <ListTree className="w-4 h-4 text-sky-400 shrink-0" />
+        <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wide">Steps in this test case</span>
+        <span className="text-[10px] font-mono text-slate-500">
+          {test.relativePath}
+          {data?.found ? `:${data.startLine}-${data.endLine}` : ''}
+        </span>
+        {data?.found && (
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/10 border border-sky-500/30 text-sky-300 font-semibold">
+            {data.steps.length} step{data.steps.length === 1 ? '' : 's'}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={onCopy}
+            disabled={!data?.found}
+            className="p-1.5 rounded-md hover:bg-slate-800 text-slate-400 hover:text-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Copy the full test block"
+            aria-label="Copy the full test block"
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            onClick={onRun}
+            className="px-2 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-semibold inline-flex items-center gap-1"
+          >
+            <Play className="w-3 h-3 fill-current" /> Run this test
+          </button>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-md hover:bg-slate-800 text-slate-500 hover:text-slate-200"
+            aria-label="Close steps panel"
+            title="Close"
+          >
+            <ChevronDown className="w-4 h-4 rotate-180" />
+          </button>
+        </div>
+      </div>
+
+      {/* body */}
+      {loading && (
+        <div className="p-4 space-y-2">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="pacc-shimmer h-7" />
+          ))}
+        </div>
+      )}
+      {error && <div className="m-4 p-3 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs">{error}</div>}
+      {!loading && !error && data && !data.found && (
+        <div className="m-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs">
+          {data.reason || 'Could not isolate this test block in the spec source.'}
+        </div>
+      )}
+      {!loading && !error && data?.found && (
+        <div className="grid xl:grid-cols-2 divide-y xl:divide-y-0 xl:divide-x divide-pw-border/60">
+          {/* Steps column */}
+          <ol className="p-3 space-y-1 max-h-96 overflow-auto">
+            {data.steps.length === 0 && (
+              <li className="text-[11px] text-slate-500 p-2">
+                No executable steps detected — the test body only contains declarations or non-awaited calls.
+              </li>
+            )}
+            {data.steps.map((step) => {
+              const kind = STEP_KIND_META[step.kind] ?? STEP_KIND_META.action;
+              return (
+                <li
+                  key={step.index}
+                  className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-800/50 transition-colors"
+                >
+                  <span className="w-5 h-5 shrink-0 rounded-md bg-slate-800 text-[9px] font-mono font-bold text-slate-400 flex items-center justify-center mt-0.5">
+                    {step.index}
+                  </span>
+                  <span
+                    className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[8px] font-bold tracking-wide mt-0.5 ${kind.cls}`}
+                  >
+                    {kind.icon}
+                    {kind.label}
+                  </span>
+                  <code className="flex-1 min-w-0 text-[10px] font-mono text-slate-300 break-all leading-relaxed">
+                    {step.code}
+                  </code>
+                  <span className="shrink-0 text-[9px] font-mono text-slate-600 mt-0.5">L{step.line}</span>
+                </li>
+              );
+            })}
+          </ol>
+          {/* Source column */}
+          <div className="p-3 max-h-96 overflow-auto bg-slate-950/40">
+            <div className="text-[9px] font-bold uppercase tracking-widest text-slate-600 px-1 pb-1.5">Source</div>
+            <pre className="text-[10px] leading-relaxed font-mono text-slate-400 whitespace-pre-wrap break-all">{data.source}</pre>
+          </div>
+        </div>
+      )}
+    </div>
   );
 };

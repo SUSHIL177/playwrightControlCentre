@@ -175,7 +175,39 @@ const mock = {
   deleteProject: async () => undefined,
   rescanProject: async () => undefined,
   getTestTree: async () => [],
-  listTests: async () => [],
+  listTests: async () => [{
+    id: 't1', projectId: 'p1', title: 'checkout flow', fullTitle: 'checkout flow',
+    suitePath: [], filePath: '/fixture/tests/checkout.spec.ts', relativePath: 'tests/checkout.spec.ts',
+    folderPath: 'tests', line: 3, column: 1, tags: ['@smoke'], annotations: [], projectName: 'chromium',
+    lastStatus: 'failed', lastDurationMs: 4200, retryCount: 2,
+  }],
+  getTestSteps: async (_pid, testId) => ({
+    testId, testTitle: 'checkout flow', relativePath: 'tests/checkout.spec.ts',
+    lineCount: 8, tags: ['@smoke'], lastStatus: 'failed', lastDurationMs: 4200, fileExists: true,
+    found: true, startLine: 3, endLine: 8, bodyStartLine: 3,
+    source: "test('checkout flow', async ({ page }) => {\n  await page.goto('https://example.test/cart');\n  await page.getByRole('button', { name: 'Submit' }).click();\n  await expect(page.getByText('Order placed')).toBeVisible();\n});",
+    bodySource: "{\n  await page.goto('https://example.test/cart');\n  await page.getByRole('button', { name: 'Submit' }).click();\n  await expect(page.getByText('Order placed')).toBeVisible();\n}",
+    steps: [
+      { index: 1, kind: 'navigation', line: 4, code: "page.goto('https://example.test/cart')" },
+      { index: 2, kind: 'action', line: 5, code: "page.getByRole('button', { name: 'Submit' }).click()" },
+      { index: 3, kind: 'assertion', line: 6, code: "expect(page.getByText('Order placed')).toBeVisible()" },
+    ],
+  }),
+  getImprovementAdvisor: async () => ({
+    generatedAt: new Date().toISOString(),
+    projectId: 'p1',
+    analyzedCount: 2,
+    tests: [{
+      testId: 't1', testTitle: 'checkout flow', relativePath: 'tests/checkout.spec.ts', line: 3,
+      avgDurationMs: 4200, lastStatus: 'failed', retryCount: 2, flakinessRate: 40, score: 68,
+      estimatedTimeSavedMs: 2500,
+      issues: [
+        { id: 'hard-wait', severity: 'critical', category: 'flakiness', title: '1 hard-coded wait (2.5s of blind sleeping)', detail: 'waitForTimeout(2500)', code: 'await page.waitForTimeout(2500)', line: 5, recommendation: 'Delete fixed sleeps. Wait for the real condition: expect(locator).toBeVisible().', impact: 'Recovers ~2.5s per run and removes the most common CI flake.', estimatedTimeSavedMs: 2500 },
+        { id: 'no-assertions', severity: 'warning', category: 'coverage', title: 'No expect() assertions in this test', detail: 'A test without assertions cannot detect a wrong result.', recommendation: 'Add web-first assertions on the outcome.', impact: 'Silent regressions become visible on the PR that introduces them.' },
+      ],
+    }],
+    summary: { flaggedTests: 1, critical: 1, warning: 1, info: 0, totalEstimatedTimeSavedMs: 2500 },
+  }),
   startWatchingTests: async () => true,
   onTestsChanged: () => () => {},
   startExecution: async (opts) => { startExecutionCalls.push(opts); return { executionId: BATCH.id }; },
@@ -225,7 +257,6 @@ const mock = {
   },
   getFlakyTests: async () => [],
   getCrossBrowserMatrix: async () => [],
-  getPerformanceBottlenecks: async () => [],
   listSchedules: async () => [],
   saveSchedule: async () => undefined,
   deleteSchedule: async () => undefined,
@@ -269,10 +300,15 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
     check('workers modal opens on quick run', /Parallel workers/i.test(bodyText()));
     const eightBtn = [...window.document.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '8');
     if (eightBtn) { click(eightBtn); await flush(150); }
+    const firefoxChip = [...window.document.querySelectorAll('button')].find((b) => (b.textContent || '').includes('Firefox'));
+    if (firefoxChip) { click(firefoxChip); await flush(150); }
+    const startWithTwo = findButton('Start Regression Run');
+    check('browser chips update the launch summary', !!startWithTwo && /· 2 browsers\)/.test(startWithTwo.textContent || ''));
     const startBtn = findButton('Start Regression Run');
-    check('confirm button reflects chosen worker count', !!startBtn && /\(8 workers\)/.test(startBtn.textContent || ''));
+    check('confirm button reflects chosen worker count', !!startBtn && /\(8 workers · /.test(startBtn.textContent || ''));
     if (startBtn) { click(startBtn); await flush(200); }
     check('batch launches with the selected workers (not a hardcoded 4)', startExecutionCalls.length > 0 && startExecutionCalls[startExecutionCalls.length - 1].workers === 8);
+    check('batch launches with the selected browsers (chromium + firefox override)', startExecutionCalls.length > 0 && JSON.stringify(startExecutionCalls[startExecutionCalls.length - 1].browsers) === JSON.stringify(['chromium', 'firefox']));
   }
 
   // Sidebar collapse / expand toggle
@@ -351,7 +387,7 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
     ['Test Explorer', /Test Explorer/i],
     ['Flaky Intelligence', /Flaky/i],
     ['Cross-Browser', /Cross-Browser/i],
-    ['Performance', /Performance/i],
+    ['Test Advisor', /Test Improvement Advisor/i],
     ['Regression Scheduler', /Scheduler|Regression/i],
     ['Project Configuration', /Project Configuration|Configuration/i],
     ['Settings', /Settings/i],
@@ -363,6 +399,26 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
       check('Execution Center shows Stop Running Batch while running', bodyText().includes('Stop Running Batch'));
     }
   }
+
+  // Test Advisor — ranked findings, recommendation + impact render
+  nav('Test Advisor'); await flush(250);
+  check('Test Advisor renders ranked findings', /checkout flow/.test(bodyText()) && /hard-coded wait/i.test(bodyText()));
+  const adviceHead = [...window.document.querySelectorAll('button')].find((b) => (b.textContent || '').includes('checkout flow') && (b.textContent || '').includes('tests/checkout.spec.ts'));
+  if (adviceHead) { click(adviceHead); await flush(200); }
+  check('advisor expands issue detail with recommendation and impact', /Recommendation/.test(bodyText()) && /Impact if implemented/.test(bodyText()));
+  check('sidebar has no stale Performance Intel entry', ![...window.document.querySelectorAll('button, a, [role="button"]')].some((b) => (b.textContent || '').includes('Performance Intel')));
+
+  // Test Explorer — click a test to reveal implemented steps
+  nav('Test Explorer'); await flush(250);
+  const explorerTest = [...window.document.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === 'checkout flow');
+  check('explorer lists the discovered test', !!explorerTest);
+  if (explorerTest) {
+    click(explorerTest);
+    await flush(250);
+    check('inline steps panel opens with classified steps', /Steps in this test case/.test(bodyText()) && /action/i.test(bodyText()));
+    check('steps panel shows the assertion step', /expect\(page\.getByText/.test(bodyText()));
+  }
+
 
   const failed = results.filter(([, ok]) => !ok);
   console.log(failed.length === 0 ? '\nUI SMOKE: ALL CHECKS PASSED' : `\nUI SMOKE: ${failed.length} FAILURE(S)`);

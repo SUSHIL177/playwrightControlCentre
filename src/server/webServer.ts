@@ -9,6 +9,8 @@ import { AnalyticsIntelligenceService } from '../main/services/AnalyticsIntellig
 import { SchedulerAndReportService } from '../main/services/SchedulerAndReportService';
 import { SettingsService } from '../main/services/SettingsService';
 import { ArtifactCatalogService } from '../main/services/ArtifactCatalogService';
+import { SpecAnalysisService } from '../main/services/SpecAnalysisService';
+import { ImprovementAdvisorService } from '../main/services/ImprovementAdvisorService';
 import { createDispatch, type DispatchServices, type DispatchHooks } from './dispatchCore';
 import {
   clearLoginFailures,
@@ -70,6 +72,8 @@ const failureService = new FailureIntelligenceService(settingsService);
 const analyticsService = new AnalyticsIntelligenceService();
 const schedulerReportService = new SchedulerAndReportService(executionService);
 const artifactService = new ArtifactCatalogService();
+const specAnalysisService = new SpecAnalysisService();
+const improvementAdvisorService = new ImprovementAdvisorService();
 
 const services: DispatchServices = {
   discovery: discoveryService,
@@ -79,6 +83,8 @@ const services: DispatchServices = {
   schedulerReport: schedulerReportService,
   settings: settingsService,
   artifacts: artifactService,
+  specAnalysis: specAnalysisService,
+  improvement: improvementAdvisorService,
 };
 
 // ── SSE fan-out, strictly per tenant ─────────────────────────────────────────

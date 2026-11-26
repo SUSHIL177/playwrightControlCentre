@@ -12,6 +12,8 @@ import { AnalyticsIntelligenceService } from './services/AnalyticsIntelligenceSe
 import { SchedulerAndReportService } from './services/SchedulerAndReportService';
 import { SettingsService } from './services/SettingsService';
 import { ArtifactCatalogService } from './services/ArtifactCatalogService';
+import { SpecAnalysisService } from './services/SpecAnalysisService';
+import { ImprovementAdvisorService } from './services/ImprovementAdvisorService';
 import { LocalBridgeServer } from './server/LocalBridgeServer';
 import { configureElectronUserData } from './platform/tenant';
 import { GitImportRequest } from '../shared/types';
@@ -29,6 +31,8 @@ const failureService = new FailureIntelligenceService(settingsService);
 const analyticsService = new AnalyticsIntelligenceService();
 const schedulerReportService = new SchedulerAndReportService(executionService);
 const artifactService = new ArtifactCatalogService();
+const specAnalysisService = new SpecAnalysisService();
+const improvementAdvisorService = new ImprovementAdvisorService();
 const bridgeServer = new LocalBridgeServer(
   discoveryService,
   executionService,
@@ -37,6 +41,8 @@ const bridgeServer = new LocalBridgeServer(
   schedulerReportService,
   settingsService,
   artifactService,
+  specAnalysisService,
+  improvementAdvisorService,
   () => mainWindow
 );
 
@@ -316,8 +322,12 @@ function registerIpcHandlers(): void {
     return analyticsService.getCrossBrowserMatrix(projectId);
   });
 
-  ipcMain.handle(IPC.INTEL_PERFORMANCE, (_, projectId: string) => {
-    return analyticsService.getPerformanceBottlenecks(projectId);
+  ipcMain.handle(IPC.TESTS_GET_STEPS, (_, projectId: string, testId: string) => {
+    return specAnalysisService.getTestSteps(projectId, testId);
+  });
+
+  ipcMain.handle(IPC.INTEL_IMPROVE, (_, projectId: string) => {
+    return improvementAdvisorService.analyze(projectId);
   });
 
   ipcMain.handle(IPC.SCHEDULER_LIST, () => {

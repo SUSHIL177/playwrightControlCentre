@@ -9,6 +9,8 @@ import { AnalyticsIntelligenceService } from '../main/services/AnalyticsIntellig
 import { SchedulerAndReportService } from '../main/services/SchedulerAndReportService';
 import { SettingsService } from '../main/services/SettingsService';
 import { ArtifactCatalogService } from '../main/services/ArtifactCatalogService';
+import { SpecAnalysisService } from '../main/services/SpecAnalysisService';
+import { ImprovementAdvisorService } from '../main/services/ImprovementAdvisorService';
 import { DesktopOnlyError } from '../main/platform/runtime';
 import { reposRoot, tenantContext } from '../main/platform/tenant';
 import { GitImportRequest } from '../shared/types';
@@ -29,6 +31,8 @@ export interface DispatchServices {
   schedulerReport: SchedulerAndReportService;
   settings: SettingsService;
   artifacts: ArtifactCatalogService;
+  specAnalysis: SpecAnalysisService;
+  improvement: ImprovementAdvisorService;
 }
 
 /** Extract the RUN-… batch id out of an archived report path, if present. */
@@ -247,8 +251,10 @@ export function createDispatch(services: DispatchServices, hooks: DispatchHooks)
         return analyticsService.getFlakyTests(args[0], args[1]);
       case 'getCrossBrowserMatrix':
         return analyticsService.getCrossBrowserMatrix(args[0]);
-      case 'getPerformanceBottlenecks':
-        return analyticsService.getPerformanceBottlenecks(args[0]);
+      case 'getTestSteps':
+        return services.specAnalysis.getTestSteps(args[0], args[1]);
+      case 'getImprovementAdvisor':
+        return services.improvement.analyze(args[0]);
       case 'listSchedules':
         return schedulerReportService.listSchedules();
       case 'saveSchedule':

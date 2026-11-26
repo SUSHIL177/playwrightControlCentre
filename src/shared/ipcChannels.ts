@@ -10,6 +10,7 @@ export const IPC = {
   TESTS_LIST: 'tests:list',
   TESTS_WATCH_START: 'tests:watch-start',
   TESTS_CHANGED_EVENT: 'tests:changed-event',
+  TESTS_GET_STEPS: 'tests:get-steps',
 
   EXEC_START: 'exec:start',
   EXEC_STOP: 'exec:stop',
@@ -47,7 +48,7 @@ export const IPC = {
 
   INTEL_FLAKY_TESTS: 'intel:flaky-tests',
   INTEL_CROSS_BROWSER: 'intel:cross-browser',
-  INTEL_PERFORMANCE: 'intel:performance',
+  INTEL_IMPROVE: 'intel:improve',
   INTEL_DUPLICATES: 'intel:duplicates',
   INTEL_AI_SUMMARY: 'intel:ai-summary',
 

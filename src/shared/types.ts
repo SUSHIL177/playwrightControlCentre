@@ -10,7 +10,7 @@ export type NavRoute =
   | 'flaky'
   | 'cross-browser'
   | 'code-fix'
-  | 'performance'
+  | 'improve'
   | 'scheduler'
   | 'reports'
   | 'history'
@@ -317,4 +317,62 @@ export interface ArtifactPreview {
   /** Present for contentType === 'image' — base64 data URL. */
   dataUrl?: string;
   truncated: boolean;
+}
+
+// ── Test Improvement Advisor ─────────────────────────────────────────────────
+export type ImprovementSeverity = 'critical' | 'warning' | 'info';
+export type ImprovementCategory =
+  | 'flakiness'
+  | 'performance'
+  | 'maintainability'
+  | 'reliability'
+  | 'coverage';
+
+export interface ImprovementIssue {
+  id: string;
+  severity: ImprovementSeverity;
+  category: ImprovementCategory;
+  /** Short headline, e.g. "2 hard-coded waits (5.0s of blind sleeping)". */
+  title: string;
+  /** Evidence detail — counts, sample lines, measured values. */
+  detail: string;
+  /** Offending source line, when applicable. */
+  code?: string;
+  /** 1-based line in the spec file, when applicable. */
+  line?: number;
+  /** Concrete, actionable fix. */
+  recommendation: string;
+  /** What changes if the fix lands — the "impact if implemented" statement. */
+  impact: string;
+  /** Measurable wall-clock saving per affected run, when estimable. */
+  estimatedTimeSavedMs?: number;
+}
+
+export interface TestImprovementAdvice {
+  testId: string;
+  testTitle: string;
+  relativePath: string;
+  line: number;
+  avgDurationMs: number | null;
+  lastStatus?: string;
+  retryCount: number;
+  flakinessRate: number;
+  /** Ranking score — higher means more improvement headroom. */
+  score: number;
+  estimatedTimeSavedMs: number;
+  issues: ImprovementIssue[];
+}
+
+export interface ImprovementAdvisorResult {
+  generatedAt: string;
+  projectId: string;
+  analyzedCount: number;
+  tests: TestImprovementAdvice[];
+  summary: {
+    flaggedTests: number;
+    critical: number;
+    warning: number;
+    info: number;
+    totalEstimatedTimeSavedMs: number;
+  };
 }

@@ -4,14 +4,13 @@ import { AppSettings, FlakyTestMetric, ProjectConfig, ScheduleConfig } from '@sh
 import { formatMinutes } from '@shared/format';
 
 export const FlakyAndPerformancePage: React.FC<{
-  mode: 'flaky' | 'cross-browser' | 'performance';
+  mode: 'flaky' | 'cross-browser';
   project: ProjectConfig | null;
   /** Bumped by the app whenever an execution batch completes — forces telemetry refetch. */
   refreshKey?: number;
 }> = ({ mode, project, refreshKey = 0 }) => {
   const [flakyList, setFlakyList] = useState<FlakyTestMetric[]>([]);
   const [matrix, setMatrix] = useState<any[]>([]);
-  const [perf, setPerf] = useState<{ slowTests: any[]; folderDurations: any[] }>({ slowTests: [], folderDurations: [] });
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -22,15 +21,12 @@ export const FlakyAndPerformancePage: React.FC<{
     const request: Promise<any> =
       mode === 'flaky'
         ? window.pwControlCenter.getFlakyTests(project.id)
-        : mode === 'cross-browser'
-        ? window.pwControlCenter.getCrossBrowserMatrix(project.id)
-        : window.pwControlCenter.getPerformanceBottlenecks(project.id);
+        : window.pwControlCenter.getCrossBrowserMatrix(project.id);
 
     request
       .then((data) => {
         if (mode === 'flaky') setFlakyList(Array.isArray(data) ? data : []);
-        else if (mode === 'cross-browser') setMatrix(Array.isArray(data) ? data : []);
-        else setPerf(data && Array.isArray(data.slowTests) ? data : { slowTests: [], folderDurations: [] });
+        else setMatrix(Array.isArray(data) ? data : []);
       })
       .catch((err) => {
         console.error('[ControlCenter] Failed to load intelligence telemetry:', err);
@@ -65,7 +61,7 @@ export const FlakyAndPerformancePage: React.FC<{
                 <th className="p-3">Trend</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-pw-border/50">
+            <tbody className="divide-y divide-pw-border/50 pacc-rows">
               {flakyList.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="p-6 text-center text-slate-500">
@@ -109,7 +105,7 @@ export const FlakyAndPerformancePage: React.FC<{
                 <th className="p-3">WebKit</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-pw-border/50">
+            <tbody className="divide-y divide-pw-border/50 pacc-rows">
               {matrix.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="p-6 text-center text-slate-500">
@@ -133,44 +129,7 @@ export const FlakyAndPerformancePage: React.FC<{
     );
   }
 
-  return (
-    <div className="p-6 space-y-4">
-      <h1 className="text-xl font-bold text-white">Test Performance Intelligence & Bottlenecks</h1>
-      {errorBanner}
-      <div className="bg-pw-panel border border-pw-border rounded-xl overflow-hidden overflow-x-auto">
-        <table className="w-full min-w-[720px] text-left text-xs">
-          <thead className="bg-pw-slate text-slate-400 border-b border-pw-border">
-            <tr>
-              <th className="p-3">Slowest Test Case</th>
-              <th className="p-3">Browser</th>
-              <th className="p-3">Avg Duration</th>
-              <th className="p-3">Max Duration</th>
-              <th className="p-3">Total Retries</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-pw-border/50">
-            {perf.slowTests.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="p-6 text-center text-slate-500">
-                  {loading ? 'Loading performance telemetry…' : 'No execution timings recorded yet. Execute a batch to identify bottlenecks.'}
-                </td>
-              </tr>
-            ) : (
-              perf.slowTests.map((t, idx) => (
-                <tr key={idx}>
-                  <td className="p-3 text-white font-medium">{t.testTitle}</td>
-                  <td className="p-3 text-slate-300">{t.browser}</td>
-                  <td className="p-3 text-amber-300 font-mono">{formatMinutes(t.avgDurationMs)}</td>
-                  <td className="p-3 text-rose-300 font-mono">{formatMinutes(t.maxDurationMs)}</td>
-                  <td className="p-3">{t.totalRetries}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+  return null;
 };
 
 export const SchedulerPage: React.FC<{ project: ProjectConfig | null; refreshKey?: number }> = ({ project, refreshKey = 0 }) => {

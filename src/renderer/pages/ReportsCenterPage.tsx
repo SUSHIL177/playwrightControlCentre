@@ -11,6 +11,7 @@ import {
   StopCircle,
   Loader2,
 } from 'lucide-react';
+import { BrowserType } from '@shared/types';
 import { ExecutionBatch } from '@shared/types';
 import { DESKTOP_CAPS, fetchCapabilities, type WebCapabilities } from '../webMode';
 import { batchFullLabel, batchShortLabel, statusAppearance } from '../utils/batchFormat';
@@ -29,7 +30,7 @@ const FILTERS: Array<{ id: StatusFilter; label: string }> = [
 export const ReportsCenterPage: React.FC<{
   batches: ExecutionBatch[];
   onRefresh: () => Promise<void>;
-  onRunSuite: (workers: number) => void;
+  onRunSuite: (workers: number, browsers: BrowserType[]) => void;
 }> = ({ batches, onRefresh, onRunSuite }) => {
   const [workersModalOpen, setWorkersModalOpen] = useState(false);
   const [hostedUrl, setHostedUrl] = useState<string | null>(null);
@@ -257,12 +258,12 @@ export const ReportsCenterPage: React.FC<{
       <WorkersModal
         open={workersModalOpen}
         title="Run Full Regression Suite"
-        description="Pick how many Playwright workers run in parallel for this batch — instead of always using 4."
+        description="Pick the browsers (overrides playwright.config.ts) and parallel workers for this batch."
         confirmLabel="Start Regression Run"
         defaultWorkers={4}
-        onConfirm={(workers) => {
+        onConfirm={(workers, browsers) => {
           setWorkersModalOpen(false);
-          onRunSuite(workers);
+          onRunSuite(workers, browsers);
         }}
         onClose={() => setWorkersModalOpen(false)}
       />

@@ -88,8 +88,9 @@ const controlCenterAPI = {
   listProposals: (projectId: string) => ipcRenderer.invoke(IPC.HEALING_LIST, projectId),
 
   getFlakyTests: (projectId: string, minRuns?: number) => ipcRenderer.invoke(IPC.INTEL_FLAKY_TESTS, projectId, minRuns),
+  getTestSteps: (projectId: string, testId: string) => ipcRenderer.invoke(IPC.TESTS_GET_STEPS, projectId, testId),
   getCrossBrowserMatrix: (projectId: string) => ipcRenderer.invoke(IPC.INTEL_CROSS_BROWSER, projectId),
-  getPerformanceBottlenecks: (projectId: string) => ipcRenderer.invoke(IPC.INTEL_PERFORMANCE, projectId),
+  getImprovementAdvisor: (projectId: string) => ipcRenderer.invoke(IPC.INTEL_IMPROVE, projectId),
 
   listSchedules: () => ipcRenderer.invoke(IPC.SCHEDULER_LIST),
   saveSchedule: (cfg: Omit<ScheduleConfig, 'id'> & { id?: string }) => ipcRenderer.invoke(IPC.SCHEDULER_SAVE, cfg),
