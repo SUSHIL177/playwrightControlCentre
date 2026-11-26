@@ -340,6 +340,15 @@ export interface ImprovementIssue {
   code?: string;
   /** 1-based line in the spec file, when applicable. */
   line?: number;
+  /**
+   * Exact code change this recommendation implies — which part of the spec to
+   * replace and with what. `before` omitted when the fix is purely additive.
+   */
+  fix?: {
+    before?: string;
+    after: string;
+    note?: string;
+  };
   /** Concrete, actionable fix. */
   recommendation: string;
   /** What changes if the fix lands — the "impact if implemented" statement. */
@@ -353,10 +362,14 @@ export interface TestImprovementAdvice {
   testTitle: string;
   relativePath: string;
   line: number;
-  avgDurationMs: number | null;
+  /** Duration of this test in its most recent run (null when never executed). */
+  latestDurationMs: number | null;
+  /** Status of this test in its most recent run. */
   lastStatus?: string;
+  /** Retries this test burned in its most recent run. */
   retryCount: number;
-  flakinessRate: number;
+  /** True when the most recent run passed on retry or was marked flaky. */
+  flakyInLatestRun: boolean;
   /** Ranking score — higher means more improvement headroom. */
   score: number;
   estimatedTimeSavedMs: number;
@@ -368,6 +381,10 @@ export interface ImprovementAdvisorResult {
   projectId: string;
   analyzedCount: number;
   tests: TestImprovementAdvice[];
+  /** Signals come from each test's most recent run — never from all-time aggregates. */
+  telemetryScope: 'latest' | 'none';
+  /** Human label of the latest execution batch (e.g. "RUN-0007 · Full Regression · Nov 26"). */
+  latestRunLabel: string | null;
   summary: {
     flaggedTests: number;
     critical: number;

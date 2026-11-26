@@ -513,7 +513,7 @@ interface FlipKpiCardProps {
 
 const FlipKpiCard: React.FC<FlipKpiCardProps> = ({ label, icon, frontValue, frontCaption, backValue, backCaption, delayMs = 0 }) => (
   <div
-    className="kpi-flip h-32 pacc-lift pacc-animate-in"
+    className="kpi-flip h-28 pacc-lift pacc-animate-in"
     style={{ animationDelay: `${delayMs}ms` }}
     tabIndex={0}
     role="group"
@@ -522,25 +522,31 @@ const FlipKpiCard: React.FC<FlipKpiCardProps> = ({ label, icon, frontValue, fron
     <div className="kpi-flip-inner">
       {/* Front — latest execution */}
       <div className="kpi-flip-face bg-pw-panel border border-pw-border p-3 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between gap-1.5 text-[11px] text-slate-400 min-h-[20px]">
-          <span className="flex items-center gap-1.5 truncate">{icon}{label}</span>
+        <div className="flex items-center justify-between gap-2 text-[11px] leading-none text-slate-400">
+          <span className="flex items-center gap-1.5 min-w-0" title={label}>
+            <span className="shrink-0">{icon}</span>
+            <span className="truncate">{label}</span>
+          </span>
           <span className="text-[8px] font-bold tracking-widest text-sky-400 bg-sky-500/10 border border-sky-500/30 rounded px-1.5 py-0.5 shrink-0">
             LATEST
           </span>
         </div>
         <div className="text-2xl font-bold text-white mt-auto leading-none tabular-nums">{frontValue}</div>
-        <div className="text-[9px] leading-[1.25] text-slate-500 mt-1 line-clamp-2 break-words" title={frontCaption}>{frontCaption}</div>
+        <div className="text-[9px] leading-tight text-slate-500 mt-1 truncate" title={frontCaption}>{frontCaption}</div>
       </div>
       {/* Back — all-time totals */}
       <div className="kpi-flip-face kpi-flip-back bg-pw-navy border border-sky-900/60 p-3 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between gap-1.5 text-[11px] text-slate-400 min-h-[20px]">
-          <span className="flex items-center gap-1.5 truncate">{icon}{label}</span>
+        <div className="flex items-center justify-between gap-2 text-[11px] leading-none text-slate-400">
+          <span className="flex items-center gap-1.5 min-w-0" title={label}>
+            <span className="shrink-0">{icon}</span>
+            <span className="truncate">{label}</span>
+          </span>
           <span className="text-[8px] font-bold tracking-widest text-indigo-300 bg-indigo-500/10 border border-indigo-500/30 rounded px-1.5 py-0.5 shrink-0">
             ALL TIME
           </span>
         </div>
         <div className="text-2xl font-bold text-sky-100 mt-auto leading-none tabular-nums">{backValue}</div>
-        <div className="text-[9px] leading-[1.25] text-slate-500 mt-1 line-clamp-2 break-words" title={backCaption}>{backCaption}</div>
+        <div className="text-[9px] leading-tight text-slate-500 mt-1 truncate" title={backCaption}>{backCaption}</div>
       </div>
     </div>
   </div>

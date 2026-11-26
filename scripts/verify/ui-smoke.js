@@ -168,6 +168,7 @@ const healingProgressCbs = new Set();
 const executionCompletedCbs = new Set();
 const previewCalls = [];
 const startExecutionCalls = [];
+let advisorCalls = 0;
 const mock = {
   browseDirectory: async () => '/fixture',
   importProject: async () => null,
@@ -193,21 +194,27 @@ const mock = {
       { index: 3, kind: 'assertion', line: 6, code: "expect(page.getByText('Order placed')).toBeVisible()" },
     ],
   }),
-  getImprovementAdvisor: async () => ({
-    generatedAt: new Date().toISOString(),
-    projectId: 'p1',
-    analyzedCount: 2,
-    tests: [{
-      testId: 't1', testTitle: 'checkout flow', relativePath: 'tests/checkout.spec.ts', line: 3,
-      avgDurationMs: 4200, lastStatus: 'failed', retryCount: 2, flakinessRate: 40, score: 68,
-      estimatedTimeSavedMs: 2500,
-      issues: [
-        { id: 'hard-wait', severity: 'critical', category: 'flakiness', title: '1 hard-coded wait (2.5s of blind sleeping)', detail: 'waitForTimeout(2500)', code: 'await page.waitForTimeout(2500)', line: 5, recommendation: 'Delete fixed sleeps. Wait for the real condition: expect(locator).toBeVisible().', impact: 'Recovers ~2.5s per run and removes the most common CI flake.', estimatedTimeSavedMs: 2500 },
-        { id: 'no-assertions', severity: 'warning', category: 'coverage', title: 'No expect() assertions in this test', detail: 'A test without assertions cannot detect a wrong result.', recommendation: 'Add web-first assertions on the outcome.', impact: 'Silent regressions become visible on the PR that introduces them.' },
-      ],
-    }],
-    summary: { flaggedTests: 1, critical: 1, warning: 1, info: 0, totalEstimatedTimeSavedMs: 2500 },
-  }),
+  getImprovementAdvisor: async () => {
+    advisorCalls += 1;
+    return {
+      generatedAt: new Date().toISOString(),
+      projectId: 'p1',
+      analyzedCount: 2,
+      telemetryScope: 'latest',
+      latestRunLabel: 'Run #7 · FULL · Nov 23',
+      tests: [{
+        testId: 't1', testTitle: 'checkout flow', relativePath: 'tests/checkout.spec.ts', line: 3,
+        latestDurationMs: 4200, lastStatus: 'failed', retryCount: 2, flakyInLatestRun: true, score: 68,
+        estimatedTimeSavedMs: 2500,
+        issues: [
+          { id: 'hard-wait', severity: 'critical', category: 'flakiness', title: '1 hard-coded wait (2.5s of blind sleeping)', detail: 'waitForTimeout(2500)', code: 'await page.waitForTimeout(2500)', line: 5, recommendation: 'Delete fixed sleeps. Wait for the real condition: expect(locator).toBeVisible().', impact: 'Recovers ~2.5s per run and removes the most common CI flake.', estimatedTimeSavedMs: 2500,
+            fix: { before: 'await page.waitForTimeout(2500)', after: "await expect(page.getByRole('button', { name: 'Submit' })).toBeVisible({ timeout: 2500 })", note: 'Wait on the real condition, not the clock.' } },
+          { id: 'no-assertions', severity: 'warning', category: 'coverage', title: 'No expect() assertions in this test', detail: 'A test without assertions cannot detect a wrong result.', recommendation: 'Add web-first assertions on the outcome.', impact: 'Silent regressions become visible on the PR that introduces them.' },
+        ],
+      }],
+      summary: { flaggedTests: 1, critical: 1, warning: 1, info: 0, totalEstimatedTimeSavedMs: 2500 },
+    };
+  },
   startWatchingTests: async () => true,
   onTestsChanged: () => () => {},
   startExecution: async (opts) => { startExecutionCalls.push(opts); return { executionId: BATCH.id }; },
@@ -266,6 +273,11 @@ const mock = {
   listProjectsConfigured: undefined, // not used
 };
 window.pwControlCenter = mock;
+window.URL.createObjectURL = () => 'blob:mock-export';
+window.URL.revokeObjectURL = () => {};
+const exportAnchorClicks = [];
+const origAnchorClick = window.HTMLAnchorElement.prototype.click;
+window.HTMLAnchorElement.prototype.click = function () { exportAnchorClicks.push(this.download || ''); return origAnchorClick.call(this); };
 
 // ── Drive the bundle ─────────────────────────────────────────────────────────
 const results = [];
@@ -403,9 +415,20 @@ const flush = async (ms = 400) => { const t0 = Date.now(); while (Date.now() - t
   // Test Advisor — ranked findings, recommendation + impact render
   nav('Test Advisor'); await flush(250);
   check('Test Advisor renders ranked findings', /checkout flow/.test(bodyText()) && /hard-coded wait/i.test(bodyText()));
+  check('advisor scopes signals to the latest run', /latest execution per test/i.test(bodyText()) && bodyText().includes('Run #7'));
+  check('advisor has Export report (.md) and no Copy report', !!findButton('Export report') && !findButton('Copy report'));
+  const advisorCallsBefore = advisorCalls;
+  const reanalyzeBtn = findButton('Re-analyze');
+  check('Re-analyze button present and enabled', !!reanalyzeBtn && !reanalyzeBtn.disabled);
+  if (reanalyzeBtn) { click(reanalyzeBtn); await flush(250); }
+  check('Re-analyze re-invokes the analysis IPC', advisorCalls > advisorCallsBefore);
   const adviceHead = [...window.document.querySelectorAll('button')].find((b) => (b.textContent || '').includes('checkout flow') && (b.textContent || '').includes('tests/checkout.spec.ts'));
   if (adviceHead) { click(adviceHead); await flush(200); }
   check('advisor expands issue detail with recommendation and impact', /Recommendation/.test(bodyText()) && /Impact if implemented/.test(bodyText()));
+  check('advisor renders the exact before → after code change', /Exact change to apply/.test(bodyText()) && /waitForTimeout\(2500\)/.test(bodyText()) && /toBeVisible/.test(bodyText()));
+  const exportBtn = findButton('Export report');
+  if (exportBtn) { click(exportBtn); await flush(150); }
+  check('Export report downloads a dated markdown file', exportAnchorClicks.some((n) => /^test-improvement-report-\d{8}\.md$/.test(n)));
   check('sidebar has no stale Performance Intel entry', ![...window.document.querySelectorAll('button, a, [role="button"]')].some((b) => (b.textContent || '').includes('Performance Intel')));
 
   // Test Explorer — click a test to reveal implemented steps
