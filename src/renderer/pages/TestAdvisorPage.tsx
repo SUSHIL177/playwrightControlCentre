@@ -13,11 +13,11 @@ import {
   Target,
   ChevronDown,
   ChevronRight,
-  Copy,
-  Check,
+  Download,
   Timer,
   FlaskConical,
   Gauge,
+  History,
 } from 'lucide-react';
 import {
   ImprovementAdvisorResult,
@@ -69,21 +69,28 @@ const formatSaving = (ms: number): string => {
   return ms >= 1000 ? `~${(ms / 1000).toFixed(1)}s` : `~${Math.round(ms)}ms`;
 };
 
-function buildMarkdownReport(data: ImprovementAdvisorResult): string {
+function buildExportMarkdown(data: ImprovementAdvisorResult): string {
   const lines: string[] = [
     '# Test Improvement Report',
     `Generated: ${new Date(data.generatedAt).toLocaleString()}`,
-    `Analyzed: ${data.analyzedCount} tests · Flagged: ${data.summary.flaggedTests} · Critical: ${data.summary.critical} · Warning: ${data.summary.warning}`,
+    `Signals: static analysis of spec sources + latest run per test${data.latestRunLabel ? ` (${data.latestRunLabel})` : ''}`,
+    `Analyzed: ${data.analyzedCount} tests · Flagged: ${data.summary.flaggedTests} · Critical: ${data.summary.critical} · Warning: ${data.summary.warning} · Info: ${data.summary.info}`,
     `Estimated saving per run: ${formatSaving(data.summary.totalEstimatedTimeSavedMs)}`,
     '',
   ];
   for (const t of data.tests) {
     lines.push(`## ${t.testTitle}`);
-    lines.push(`${t.relativePath}:${t.line}`);
+    lines.push(`\`${t.relativePath}:${t.line}\` — score ${t.score}`);
     for (const i of t.issues) {
       lines.push(`- [${i.severity.toUpperCase()}] ${i.title}`);
-      lines.push(`  - Fix: ${i.recommendation}`);
-      lines.push(`  - Impact: ${i.impact}`);
+      lines.push(`  - Why: ${i.detail}`);
+      lines.push(`  - Recommendation: ${i.recommendation}`);
+      if (i.fix) {
+        if (i.fix.before) lines.push(`  - Replace: \`${i.fix.before.replace(/\n/g, '` ⏎ `')}\``);
+        lines.push(`  - With: \`${i.fix.after.replace(/\n/g, '` ⏎ `')}\``);
+        if (i.fix.note) lines.push(`  - Note: ${i.fix.note}`);
+      }
+      lines.push(`  - Impact if implemented: ${i.impact}`);
     }
     lines.push('');
   }
@@ -100,7 +107,6 @@ export const TestAdvisorPage: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [severityFilter, setSeverityFilter] = useState<'all' | ImprovementSeverity>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [manualRefresh, setManualRefresh] = useState(0);
 
   const load = useCallback(() => {
@@ -128,15 +134,18 @@ export const TestAdvisorPage: React.FC<{
     return data.tests.filter((t) => t.issues.some((i) => i.severity === severityFilter));
   }, [data, severityFilter]);
 
-  const copyReport = async () => {
+  const exportReport = () => {
     if (!data) return;
-    try {
-      await navigator.clipboard.writeText(buildMarkdownReport(data));
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      setCopied(false);
-    }
+    const blob = new Blob([buildExportMarkdown(data)], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    a.href = url;
+    a.download = `test-improvement-report-${stamp}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   };
 
   if (!project) {
@@ -159,25 +168,40 @@ export const TestAdvisorPage: React.FC<{
             telemetry — hard waits, brittle locators, missing assertions, retry burns — then ranks the tests where a
             fix pays off most. Deterministic: no AI calls, fully reproducible.
           </p>
+          <p className="text-[10px] mt-1.5 inline-flex items-center gap-1.5 font-semibold text-sky-300/90 bg-sky-500/10 border border-sky-500/25 rounded-md px-2 py-0.5">
+            <History className="w-3 h-3" />
+            {data
+              ? data.telemetryScope === 'latest'
+                ? `Signals from the latest execution per test${data.latestRunLabel ? ` — ${data.latestRunLabel}` : ''}`
+                : 'No executions recorded yet — static analysis only'
+              : 'Signals scoped to each test’s most recent run'}
+          </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={copyReport}
+            onClick={exportReport}
             disabled={!data || data.tests.length === 0}
             className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Copy a Markdown report of all flagged tests"
+            title="Download a Markdown report — share it with the team"
           >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            {copied ? 'Copied' : 'Copy report'}
+            <Download className="w-3.5 h-3.5" />
+            Export report (.md)
           </button>
-          <button
-            onClick={() => setManualRefresh((n) => n + 1)}
-            disabled={loading}
-            className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60"
-          >
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-            Re-analyze
-          </button>
+          <div className="flex flex-col items-end gap-1">
+            <button
+              onClick={() => setManualRefresh((n) => n + 1)}
+              disabled={loading}
+              className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60"
+            >
+              {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {loading ? 'Analyzing…' : 'Re-analyze'}
+            </button>
+            {data && (
+              <span className="text-[9px] text-slate-500 tabular-nums">
+                Last analyzed {new Date(data.generatedAt).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -263,7 +287,7 @@ export const TestAdvisorPage: React.FC<{
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className={`space-y-3 transition-opacity duration-200 ${loading ? 'opacity-50 pointer-events-none' : ''}`} aria-busy={loading}>
         {visibleTests.map((advice, idx) => (
           <AdviceCard
             key={advice.testId}
@@ -279,7 +303,7 @@ export const TestAdvisorPage: React.FC<{
         <p className="text-[10px] text-slate-600 flex items-center gap-1.5 pt-1">
           <Gauge className="w-3.5 h-3.5" />
           Ranked by improvement score — critical 50 pts · warning 18 pts · info 5 pts, tie-broken by estimated time
-          saved. Signals: spec source ({data.analyzedCount} files scanned) + run telemetry. Prepared{' '}
+          saved. Signals: spec source ({data.analyzedCount} files scanned) + latest run per test. Prepared{' '}
           {new Date(data.generatedAt).toLocaleString()}.
         </p>
       )}
@@ -341,8 +365,8 @@ const AdviceCard: React.FC<{
               </div>
             </div>
             <div className="hidden sm:flex items-center gap-2 shrink-0 text-[10px]">
-              <MetaChip label="avg" value={advice.avgDurationMs !== null ? formatMs(advice.avgDurationMs) : '—'} />
-              <MetaChip label="flaky" value={`${advice.flakinessRate}%`} tone={advice.flakinessRate >= 30 ? 'rose' : advice.flakinessRate >= 10 ? 'amber' : undefined} />
+              <MetaChip label="last run" value={advice.latestDurationMs !== null ? formatMs(advice.latestDurationMs) : '—'} />
+              <MetaChip label="flaky" value={advice.flakyInLatestRun ? 'yes' : 'no'} tone={advice.flakyInLatestRun ? 'amber' : undefined} />
               <MetaChip label="retries" value={String(advice.retryCount)} tone={advice.retryCount > 0 ? 'amber' : undefined} />
               {advice.estimatedTimeSavedMs > 0 && (
                 <span className="px-2 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-semibold">
@@ -428,7 +452,34 @@ const IssueRow: React.FC<{ issue: ImprovementIssue }> = ({ issue }) => {
             <p className="text-[11px] text-emerald-100/90 leading-snug">{issue.impact}</p>
           </div>
         </div>
+        {issue.fix && <FixBlock fix={issue.fix} />}
       </div>
     </div>
   );
 };
+
+/* ── Exact before → after code change ─────────────────────────────────────── */
+const FixBlock: React.FC<{ fix: NonNullable<ImprovementIssue['fix']> }> = ({ fix }) => (
+  <div className="mt-2 rounded-lg border border-violet-500/25 bg-violet-500/5 overflow-hidden">
+    <div className="px-2.5 pt-2 text-[9px] font-bold uppercase tracking-widest text-violet-300 flex items-center justify-between">
+      <span>Exact change to apply</span>
+      {fix.note && <span className="normal-case font-medium text-slate-500 tracking-normal text-[9px]">see note</span>}
+    </div>
+    <div className="p-2 font-mono text-[10px] leading-relaxed overflow-x-auto">
+      {fix.before &&
+        fix.before.split('\n').map((line, i) => (
+          <div key={`b-${i}`} className="flex gap-2 bg-rose-500/10 border-l-2 border-rose-500/60 px-2 py-0.5 text-rose-200 whitespace-pre-wrap break-all rounded-sm">
+            <span className="text-rose-400 select-none">-</span>
+            <span>{line}</span>
+          </div>
+        ))}
+      {fix.after.split('\n').map((line, i) => (
+        <div key={`a-${i}`} className="flex gap-2 bg-emerald-500/10 border-l-2 border-emerald-500/60 px-2 py-0.5 text-emerald-200 whitespace-pre-wrap break-all rounded-sm">
+          <span className="text-emerald-400 select-none">+</span>
+          <span>{line}</span>
+        </div>
+      ))}
+    </div>
+    {fix.note && <p className="px-2.5 pb-2 text-[9px] text-violet-200/70 leading-snug">{fix.note}</p>}
+  </div>
+);
